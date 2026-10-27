@@ -403,6 +403,7 @@ export const inspectAppleDispatchMetadata = async (
 export const appleDispatchMetadataFailure = (
   cause: unknown,
   path: string,
+  operation: string = OPERATION,
 ): AnalysisError => {
   if (cause instanceof ArtifactReaderFailure && cause.cleanup !== undefined) {
     const physical =
@@ -414,10 +415,11 @@ export const appleDispatchMetadataFailure = (
         ? appleDispatchMetadataPrimaryFailure(
             artifactFilePrimaryFacts(cause),
             path,
+            operation,
           )
         : physical?.completionCancellation === undefined
           ? undefined
-          : new AnalysisCancelledError(OPERATION, {
+          : new AnalysisCancelledError(operation, {
               cause: physical.completionCancellation.reason,
             });
     const failure = new ProviderCleanupError(
@@ -428,7 +430,7 @@ export const appleDispatchMetadataFailure = (
         previous_error:
           previous === undefined ? null : projectAnalysisError(previous),
       },
-      { operation: OPERATION, cause, cleanupPrimary: previous },
+      { operation, cause, cleanupPrimary: previous },
     );
     bindArtifactFileCleanup(cause, failure);
     return failure;
@@ -436,24 +438,26 @@ export const appleDispatchMetadataFailure = (
   return appleDispatchMetadataPrimaryFailure(
     artifactFilePrimaryFacts(cause),
     path,
+    operation,
   );
 };
 
 const appleDispatchMetadataPrimaryFailure = (
   { cause, origin }: ArtifactFilePrimaryFacts,
   path: string,
+  operation: string,
 ): AnalysisError => {
   if (origin === "owned-or-classified") {
     if (cause instanceof AnalysisError) return cause;
     if (cause instanceof UnsupportedMachoMetadataFormatError)
       return new AnalysisCapabilityUnavailableError(
         IDENTITY.id,
-        OPERATION,
+        operation,
         cause.message,
         { cause },
       );
     if (cause instanceof ArtifactReaderFailure && cause.reason === "cancelled")
-      return new AnalysisCancelledError(OPERATION, {
+      return new AnalysisCancelledError(operation, {
         cause: artifactFileCancellationCause(cause),
       });
     if (
@@ -462,16 +466,16 @@ const appleDispatchMetadataPrimaryFailure = (
     )
       return new AnalysisCapabilityUnavailableError(
         IDENTITY.id,
-        OPERATION,
+        operation,
         cause.message,
         { cause },
       );
     if (cause instanceof ArtifactReaderFailure && cause.reason === "integrity")
-      return new AnalysisArtifactChangedError(OPERATION, path, cause.message, {
+      return new AnalysisArtifactChangedError(operation, path, cause.message, {
         cause,
       });
     if (cause instanceof ArtifactReaderFailure && cause.reason === "path")
-      return new AnalysisArtifactChangedError(OPERATION, path, cause.message, {
+      return new AnalysisArtifactChangedError(operation, path, cause.message, {
         cause,
       });
   }
@@ -486,19 +490,19 @@ const appleDispatchMetadataPrimaryFailure = (
     "code" in readCause &&
     (readCause.code === "EACCES" || readCause.code === "EPERM")
   )
-    return new AnalysisAccessDeniedError(OPERATION, path, readCause.code, {
+    return new AnalysisAccessDeniedError(operation, path, readCause.code, {
       cause,
     });
   // This path already belongs to the bound target; loss of readability is a
   // change to that artifact, rather than a new caller input-selection error.
   if (isSelectedRegularFileError(readCause))
     return new AnalysisArtifactChangedError(
-      OPERATION,
+      operation,
       path,
       `Bound metadata target could not be read (${readCause.code}): ${path}`,
       { cause },
     );
-  return new ProviderAdapterError(IDENTITY.id, OPERATION, {
+  return new ProviderAdapterError(IDENTITY.id, operation, {
     cause,
     diagnostics: {
       target_path: path,

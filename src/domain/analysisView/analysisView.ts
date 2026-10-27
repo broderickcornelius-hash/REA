@@ -1169,6 +1169,7 @@ const machoPageViewResultSchema = z
       machoPage("imports"),
       machoPage("exports"),
       machoPage("segments"),
+      machoPage("encryption"),
       machoPage("provenance"),
     ]),
   );
