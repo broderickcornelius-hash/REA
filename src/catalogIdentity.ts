@@ -3,8 +3,10 @@ import { createHash } from "node:crypto";
 import canonicalize from "canonicalize";
 
 import { contractsForToolFamilies } from "./contracts/toolFamilies.js";
-import { promptsForToolFamilies } from "./contracts/promptContracts.js";
-import { PROMPT_CONTRACTS } from "./contracts/promptContracts.js";
+import {
+  promptsForToolFamilies,
+  PROMPT_CONTRACTS,
+} from "./contracts/promptContracts.js";
 import type { PromptContract } from "./contracts/promptContracts.js";
 import { TOOL_CONTRACTS } from "./contracts/toolContracts.js";
 import type { ToolContract } from "./contracts/toolContractTypes.js";

@@ -21,12 +21,14 @@ for (const mode of ["preinstall source", "packed source-free"]) {
               "scripts/lib/verifier-source-loader.mjs",
               "src/domain/windowsNativeArtifact.ts",
               "src/domain/peCoffHeader.ts",
+              "src/domain/peOptionalHeader.ts",
               "src/domain/dosMz.ts",
               "src/domain/result.ts",
             ]
           : [
               "dist/domain/windowsNativeArtifact.js",
               "dist/domain/peCoffHeader.js",
+              "dist/domain/peOptionalHeader.js",
               "dist/domain/dosMz.js",
               "dist/domain/result.js",
             ];
@@ -44,11 +46,12 @@ for (const mode of ["preinstall source", "packed source-free"]) {
       const artifactRoot = join(root, "native/windows/build");
       await mkdir(artifactRoot, { recursive: true });
       // An inert PE header establishes artifact validation, never addon loading.
-      const bytes = Buffer.alloc(128);
+      const bytes = Buffer.alloc(152);
       bytes.write("MZ");
       bytes.writeUInt32LE(64, 0x3c);
       bytes.write("PE\0\0", 64, "ascii");
       bytes.writeUInt16LE(0x8664, 68);
+      bytes.writeUInt16LE(64, 84);
       bytes.writeUInt16LE(0x20b, 88);
       const manifest = {
         packageVersion: "1.0.0",
