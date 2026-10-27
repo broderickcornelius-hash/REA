@@ -535,7 +535,8 @@ For [Trae](https://docs.trae.ai/ide/add-mcp-servers), setup writes
 `mcpServers.rea` into the user-scope `mcp.json` under Trae's VS Code-style
 user directory (`%APPDATA%\Trae\User` on Windows,
 `~/Library/Application Support/Trae/User` on macOS, and
-`~/.config/Trae/User` elsewhere). Entries carry `command`, `args`, and
+`$XDG_CONFIG_HOME/Trae/User`, default `~/.config/Trae/User`, elsewhere). Entries
+carry `command`, `args`, and
 `env`; stdio is the default transport. Trae discovers personal skills from
 `~/.trae/skills` (`%userprofile%\.trae\skills` on Windows), so setup
 installs its skill copy there.
