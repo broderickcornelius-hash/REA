@@ -125,6 +125,10 @@ export class EnvironmentStateStore {
   #collectionHistoryBytes = 0;
   /** The collections of the Evidence's own state, which stay known after any load. */
   #evidenceCollections: ReadonlyMap<string, readonly string[]> = new Map();
+  /** Entities served deletes kept for an application that still answers a deleted record by id, oldest first. */
+  readonly #deleted = new Map<string, StateEntity>();
+  /** Their UTF-8 bytes, kept within what `data/add` loads by dropping the oldest. */
+  #deletedBytes = 0;
 
   constructor(readonly state: EnvironmentState) {
     this.#types = new Map(
@@ -215,6 +219,8 @@ export class EnvironmentStateStore {
     this.#createdTypes.clear();
     this.#knownCollections.clear();
     this.#collectionHistoryBytes = 0;
+    this.#deleted.clear();
+    this.#deletedBytes = 0;
     for (const [type, collections] of this.#typeCollections)
       for (const collection of collections)
         this.#rememberCollection(type, collection);
@@ -311,9 +317,13 @@ export class EnvironmentStateStore {
     return this.updateAll([entity]);
   }
 
-  /** Replace held entities in one step, unless the state would outgrow what `data/add` loads; a refusal changes nothing. */
+  /**
+   * Replace held entities in one step, unless the state would outgrow what `data/add` loads; a refusal changes nothing.
+   * `order` puts held entities, the replacements among them, in that order in the places they hold.
+   */
   updateAll(
     entities: readonly StateEntity[],
+    order: readonly StateEntity[] = [],
   ): Result<void, AnalysisResourceConstraintError> {
     const replaced = new Map<StateEntity, StateEntity>();
     for (const entity of entities) {
@@ -329,11 +339,17 @@ export class EnvironmentStateStore {
       delta += jsonByteLength(entity) - jsonByteLength(held);
     const bytes = this.#grown(delta);
     if (!bytes.ok) return bytes;
+    const key = (entity: StateEntity) =>
+      compositeKey([entity.type, entity.collection, entity.id]);
+    const placed = new Set(order.map(key));
+    let next = 0;
     this.#install(
       {
         ...this.#content,
-        entities: this.#content.entities.map(
-          (candidate) => replaced.get(candidate) ?? candidate,
+        entities: this.#content.entities.map((candidate) =>
+          placed.has(key(candidate))
+            ? order[next++]!
+            : (replaced.get(candidate) ?? candidate),
         ),
       },
       bytes.value,
@@ -341,12 +357,12 @@ export class EnvironmentStateStore {
     return ok(undefined);
   }
 
-  remove(entity: StateEntity): void {
-    this.removeAll([entity]);
+  remove(entity: StateEntity, keep = false): void {
+    this.removeAll([entity], keep);
   }
 
-  /** Remove held entities in one step. */
-  removeAll(entities: readonly StateEntity[]): void {
+  /** Remove held entities in one step; with `keep`, a later item read can still find each as deleted. */
+  removeAll(entities: readonly StateEntity[], keep = false): void {
     const held = new Set(
       entities.flatMap((entity) => {
         const found = this.#entities.get(
@@ -364,6 +380,33 @@ export class EnvironmentStateStore {
     // Each removed entity takes its separator, except the last one an emptied list had none for.
     bytes -= held.size - (kept.length === 0 ? 1 : 0);
     this.#install({ ...this.#content, entities: kept }, bytes);
+    if (keep) for (const entity of held) this.#keepDeleted(entity);
+  }
+
+  /** An entity a served delete removed and kept, unless the state holds one under its key again. */
+  deleted(
+    type: string,
+    collection: string,
+    id: string,
+  ): StateEntity | undefined {
+    const key = compositeKey([type, collection, id]);
+    return this.#entities.has(key) ? undefined : this.#deleted.get(key);
+  }
+
+  #keepDeleted(entity: StateEntity): void {
+    const key = compositeKey([entity.type, entity.collection, entity.id]);
+    const earlier = this.#deleted.get(key);
+    if (earlier !== undefined) {
+      this.#deleted.delete(key);
+      this.#deletedBytes -= jsonByteLength(earlier);
+    }
+    this.#deleted.set(key, entity);
+    this.#deletedBytes += jsonByteLength(entity);
+    for (const [oldest, dropped] of this.#deleted) {
+      if (this.#deletedBytes <= STATE_INTAKE_LIMIT_BYTES) break;
+      this.#deleted.delete(oldest);
+      this.#deletedBytes -= jsonByteLength(dropped);
+    }
   }
 
   /** Set a held document's value, unless the state would outgrow what `data/add` loads; a value that is not the Evidence's cites no record. */
