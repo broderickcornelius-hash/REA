@@ -81,7 +81,16 @@ const inventoryEvidence = (
     limitations: [],
   });
   const nodes = new Map([[rootId, node(rootSha, rootFormat)]]);
-  const occurrences = [occurrence(".", "file", rootId, rootFormat)];
+  // A root occurrence's entry kind follows its format, as ArtifactGraphConstruction
+  // builds it; the inventory reader rejects a file root declared for a directory.
+  const occurrences = [
+    occurrence(
+      ".",
+      rootFormat === "directory" ? "directory" : "file",
+      rootId,
+      rootFormat,
+    ),
+  ];
   for (const {
     path,
     kind = "file",
