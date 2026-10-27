@@ -85,6 +85,8 @@ export interface ExecFileOutputFailure {
   readonly stdoutBytes?: number;
   readonly stderrBytes?: number;
   readonly collectionFailure?: boolean;
+  /** The process never started; `code` is the spawn errno, not an exit. */
+  readonly spawnFailed?: true;
 }
 
 /** Read captured output metadata from a failed execFileOutput invocation. */
@@ -101,6 +103,7 @@ export const execFileOutputFailure = (
   const stdoutBytes = Reflect.get(cause, "stdoutBytes");
   const stderrBytes = Reflect.get(cause, "stderrBytes");
   const collectionFailure = Reflect.get(cause, "collectionFailure");
+  const spawnFailed = Reflect.get(cause, "spawnFailed");
   if (typeof stdout !== "string" || typeof stderr !== "string")
     return undefined;
   return {
@@ -122,8 +125,29 @@ export const execFileOutputFailure = (
     outputTruncated:
       outputTruncated === true || code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
     ...(collectionFailure === true ? { collectionFailure: true } : {}),
+    ...(spawnFailed === true ? { spawnFailed: true } : {}),
   };
 };
+
+/** Spawn errnos reporting exhausted host capacity rather than an unusable command. */
+const HOST_SPAWN_CAPACITY_CODES: ReadonlySet<string> = new Set([
+  "EAGAIN",
+  "EMFILE",
+  "ENFILE",
+  "ENOMEM",
+]);
+
+/**
+ * Whether the command never started because the host lacked process, memory
+ * or file-descriptor capacity. The command itself may be usable; a retry after
+ * capacity is freed can succeed.
+ */
+export const spawnCapacityExhausted = (
+  failure: ExecFileOutputFailure | undefined,
+): boolean =>
+  failure?.spawnFailed === true &&
+  typeof failure.code === "string" &&
+  HOST_SPAWN_CAPACITY_CODES.has(failure.code);
 
 /** Project admitted command failure facts without reinterpreting failure policy. */
 export const execFileFailureCapturedOutput = (
@@ -141,6 +165,23 @@ export const execFileFailureCapturedOutput = (
   signal: failure.signal,
   truncated: failure.outputTruncated,
 });
+
+/**
+ * Mark an errno failure from starting the process, which Node reports as
+ * `syscall: "spawn"` when thrown synchronously and `spawn <path>` when
+ * emitted. Argument validation errors carry no errno.
+ */
+const admitSpawnFailure = (error: Error): boolean => {
+  const syscall = Reflect.get(error, "syscall");
+  if (
+    typeof Reflect.get(error, "errno") !== "number" ||
+    typeof syscall !== "string" ||
+    !(syscall === "spawn" || syscall.startsWith("spawn "))
+  )
+    return false;
+  Reflect.set(error, "spawnFailed", true);
+  return true;
+};
 
 /** Run a shell-free command with no input while capturing its complete output bytes. */
 export const execFileBytes = (
@@ -165,6 +206,7 @@ export const execFileBytes = (
       stderr: Buffer,
     ): void => {
       if (error !== null) {
+        admitSpawnFailure(error);
         Reflect.set(error, "stdout", stdout.toString("utf8"));
         Reflect.set(error, "stderr", stderr.toString("utf8"));
         Reflect.set(error, "stdoutBytes", stdout.byteLength);
@@ -174,36 +216,47 @@ export const execFileBytes = (
       }
       resolve({ stdout, stderr });
     };
-    if (stopSignal === undefined) {
-      const child = execFile(
+    try {
+      if (stopSignal === undefined) {
+        const child = execFile(
+          command,
+          [...arguments_],
+          {
+            ...execOptions,
+            ...(signal === undefined ? {} : { signal }),
+            ...(timeout === undefined ? {} : { timeout }),
+            encoding: "buffer",
+            maxBuffer: options.maxBuffer ?? Number.POSITIVE_INFINITY,
+          },
+          (error, stdout, stderr) =>
+            complete(
+              error?.name === "AbortError" && error.code === "ABORT_ERR"
+                ? new ExecFileOutputCancelledError(error.cause)
+                : error,
+              stdout,
+              stderr,
+            ),
+        );
+        // This promise API exposes no input writer; EOF belongs to the owner.
+        child.stdin?.end();
+        return;
+      }
+      startStoppableCommand(
         command,
-        [...arguments_],
-        {
-          ...execOptions,
-          ...(signal === undefined ? {} : { signal }),
-          ...(timeout === undefined ? {} : { timeout }),
-          encoding: "buffer",
-          maxBuffer: options.maxBuffer ?? Number.POSITIVE_INFINITY,
-        },
-        (error, stdout, stderr) =>
-          complete(
-            error?.name === "AbortError" && error.code === "ABORT_ERR"
-              ? new ExecFileOutputCancelledError(error.cause)
-              : error,
-            stdout,
-            stderr,
-          ),
+        arguments_,
+        { ...options, stopSignal },
+        complete,
       );
-      // This promise API exposes no input writer; EOF belongs to the owner.
-      child.stdin?.end();
-      return;
+    } catch (error) {
+      // Node throws spawn errors other than EACCES, EAGAIN, EMFILE, ENFILE and
+      // ENOENT (for example ENOTDIR, EPERM or ENOMEM) synchronously. No
+      // process started, so a spawn errno completes with the same empty
+      // capture an asynchronous spawn failure carries; argument validation
+      // errors stay unadmitted.
+      if (error instanceof Error && admitSpawnFailure(error))
+        complete(error, Buffer.alloc(0), Buffer.alloc(0));
+      else reject(error);
     }
-    startStoppableCommand(
-      command,
-      arguments_,
-      { ...options, stopSignal },
-      complete,
-    );
   });
 
 /** Own stop requests and bounded capture until the root and inherited pipes close. */
