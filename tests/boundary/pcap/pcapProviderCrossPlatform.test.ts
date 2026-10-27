@@ -426,6 +426,16 @@ it.runIf(hasNativeBound)(
     expect((result.protocol_distribution as unknown[]).length).toBeGreaterThan(
       0,
     );
+    expect(result.dns_queries).toEqual([
+      {
+        query: "api.example.com",
+        response_addresses: ["93.184.216.34"],
+        response_address_count: 1,
+      },
+    ]);
+    expect(result.unattributed_dns_addresses).toEqual([]);
+    expect(result.unattributed_dns_address_count).toBe(0);
+    expect(result.unattributed_dns_packet_count).toBe(0);
     expect(result.coverage).toBe("complete");
   },
 );

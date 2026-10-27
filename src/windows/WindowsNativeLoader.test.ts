@@ -15,11 +15,12 @@ const fixture = (
     privateBridgeDescriptorAccess?: unknown;
   } = {},
 ) => {
-  const bytes = Buffer.alloc(128);
+  const bytes = Buffer.alloc(152);
   bytes.write("MZ");
   bytes.writeUInt32LE(64, 0x3c);
   bytes.write("PE\0\0", 64, "ascii");
   bytes.writeUInt16LE(0x8664, 68);
+  bytes.writeUInt16LE(64, 84);
   bytes.writeUInt16LE(0x20b, 88);
   const manifest = {
     packageVersion: "1.0.0",
