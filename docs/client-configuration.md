@@ -642,9 +642,10 @@ literal config and a root-level insertion as shown above.
 
 For a global npm installation, the launcher is under
 `$(npm root -g)/rea-agents/scripts/rea.mjs`. Restart Harness after setup; it
-exposes tools as `mcp__rea__<tool_name>`. Run `rea setup --skill --dry-run`,
-review the destination, then `rea setup --skill --yes` to install the workflow
-in `~/.agents/skills` (`$DSH_AGENTS_HOME/skills` when configured); Harness
+exposes tools as `mcp__rea__<tool_name>`. Run
+`rea setup --skill-client dsh --skill --dry-run`, review the destination, then
+`rea setup --skill-client dsh --skill --yes` to install the workflow in
+`$DSH_AGENTS_HOME/skills`, which defaults to `~/.agents/skills`; Harness
 discovers that directory, and its native `skill` tool can load
 `reverse-engineer-anything`.
 
