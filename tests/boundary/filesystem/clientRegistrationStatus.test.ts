@@ -16,6 +16,7 @@ import { existingMaintenanceScope } from "../../../src/application/UpdateMainten
 import { ConfigurationError } from "../../../src/domain/configurationErrors.js";
 import { err } from "../../../src/domain/result.js";
 import { PRODUCT_IDENTITY } from "../../../src/identity.js";
+import { CURRENT_ENTRYPOINT_PATH } from "../../../src/process/CurrentEntrypointPath.js";
 
 beforeEach(clearClientLocationEnvironment);
 afterEach(() => {
@@ -249,7 +250,7 @@ describe("client registration launcher identity", () => {
       client: "cursor",
       command,
       state: "unknown",
-      remediation: expect.stringContaining("registration was retained"),
+      remediation: `The existing "rea" registration read from ${join(home, ".cursor/mcp.json")} has unknown ownership and was not changed. Review its launcher and manually rename or remove that registration before rerunning setup. A different installation path does not prove REA ownership.`,
     });
     expect(status).not.toHaveProperty("commandIdentity");
     expect(await readClientRegistrationInspections(home, "")).toEqual([
@@ -498,7 +499,8 @@ describe("Ghidra multi-function deadline registration advice", () => {
     async ({ provider, timeout, hasBatchScope }) => {
       const home = await createTestTempDirectory("rea-codex-decompile-scope-");
       await mkdir(join(home, ".codex"));
-      const entry = resolve("scripts/rea.mjs");
+      const entry = CURRENT_ENTRYPOINT_PATH;
+      if (entry === undefined) throw new Error("missing current entrypoint");
       const configPath = join(home, ".codex/config.toml");
       // Two 600-second Ghidra decompiles plus startup/headroom would need an
       // estimated 1650 seconds. A caller's shorter or longer choice stays theirs.

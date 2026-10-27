@@ -368,9 +368,17 @@ it("preserves the initial partial observation when the provider cleanup retry al
     const result = await serveScenario();
     expect(result.output).toMatchObject({ code: "cleanup_incomplete" });
     expect(JSON.stringify(result.output)).toContain("injected close failure 1");
-    expect(JSON.stringify(result.output)).not.toContain(
-      "injected close failure 2",
-    );
+    expect(JSON.stringify(result.output)).toContain("injected close failure 2");
+    expect(result.output).toMatchObject({
+      details: {
+        partial_observation: {
+          capture: {
+            browser: { cleanup: "incomplete" },
+            steps: [{ step_id: "scenario_start" }, { step_id: "wait" }],
+          },
+        },
+      },
+    });
     expect(close).toHaveBeenCalledTimes(1);
     expect(session.closeBrowserCalls).toBe(2);
     expect(session.profileRemovalCalls).toBe(0);
@@ -483,10 +491,16 @@ it("preserves a thrown capture error when provider shutdown also rejects", async
   try {
     const result = await serveScenario();
     expect(result.output).toMatchObject({
-      code: "provider_timeout",
+      code: "cleanup_incomplete",
       category: "timeout",
+      details: {
+        execution_failure: "provider_timeout",
+        diagnostics: {
+          primary_error: { code: "provider_timeout", category: "timeout" },
+        },
+      },
     });
-    expect(JSON.stringify(result.output)).not.toContain(
+    expect(JSON.stringify(result.output)).toContain(
       "secondary shutdown failure",
     );
     expect(close).toHaveBeenCalledTimes(1);
