@@ -5,6 +5,11 @@ import { describe, expect, it } from "vitest";
 
 import { createTestTempDirectory } from "../../../fixtures/temporaryDirectory.js";
 
+import { parseBinaryTarget } from "../../../../src/application/BinaryTargetResolver.js";
+import {
+  CPU,
+  machoImage,
+} from "../../../../src/artifacts/apple/MachoImage.fixture.js";
 import { ArtifactProvider } from "../../../../src/artifacts/ArtifactProvider.js";
 import { artifactExtractionExecutionSchema } from "../../../../src/contracts/artifactToolContracts.js";
 import {
@@ -13,19 +18,24 @@ import {
 } from "../../../../src/domain/artifactGraph.js";
 import type { BinaryTarget } from "../../../../src/domain/binaryTargetTypes.js";
 import { withArtifactClient } from "../../../support/artifactClientScope.js";
+import { registerArtifactCommands } from "../../../../src/cli/artifactCommands.js";
+import type { CliInstance } from "../../../../src/cli/types.js";
+import type { DirectAnalysis } from "../../../../src/composition/directAnalysis.js";
+import { ok } from "../../../../src/domain/result.js";
+import pino from "pino";
 
 describe("artifact extraction", () => {
   it.skipIf(process.platform === "win32").each(["file/..", "missing"])(
     "refuses an invalid parent (%s) before acquiring output and permits a corrected request",
     async (parent) => {
       const root = await createTestTempDirectory("rea-extract-invalid-parent-");
-      const source = join(root, "source");
+      const source = join(root, "source.app");
       await mkdir(source);
       await writeFile(join(source, "payload.txt"), "selected payload\n");
       await writeFile(join(root, "file"), "parent is a file");
       const output = join(root, "out");
 
-      await withArtifactClient(target(source, "directory"), async (client) => {
+      await withArtifactClient(await target(source), async (client) => {
         const refused = await client.execute("extract_artifact", {
           output_root: `${root}/${parent}/out`,
         });
@@ -52,12 +62,12 @@ describe("artifact extraction", () => {
 
   it("keeps committed files after the owning client closes", async () => {
     const root = await createTestTempDirectory("rea-extract-client-close-");
-    const source = join(root, "source");
+    const source = join(root, "source.app");
     await mkdir(source);
     await writeFile(join(source, "payload.txt"), "committed\n");
     const output = join(root, "output");
     const client = new ArtifactProvider(process.env).createClient(
-      target(source, "directory"),
+      await target(source),
     );
 
     const result = await client.execute("extract_artifact", {
@@ -72,11 +82,11 @@ describe("artifact extraction", () => {
 
   it("extracts all regular occurrences through an exclusively owned output tree", async () => {
     const root = await createTestTempDirectory("rea-extract-");
-    const source = join(root, "source");
+    const source = join(root, "source.app");
     await mkdir(join(source, "assets"), { recursive: true });
     await writeFile(join(source, "assets", "selected.js"), "selected();\n");
     await writeFile(join(source, "assets", "ignored.js"), "ignored();\n");
-    const targetValue = target(source, "directory");
+    const targetValue = await target(source);
     const graph = await inventory(targetValue);
     expect(
       graph.occurrences.some(
@@ -160,7 +170,7 @@ describe("artifact extraction", () => {
     expect((await readdir(root)).sort()).toEqual([
       "output",
       "relocated-output",
-      "source",
+      "source.app",
     ]);
   });
 });
@@ -168,10 +178,10 @@ describe("artifact extraction", () => {
 describe("artifact extraction dry-run", () => {
   it("supports dry_run extraction planning and refuses existing destinations without creating files", async () => {
     const root = await createTestTempDirectory("rea-extract-dry-run-boundary-");
-    const source = join(root, "source");
+    const source = join(root, "source.app");
     await mkdir(join(source, "nested"), { recursive: true });
     await writeFile(join(source, "nested", "item.txt"), "hello world\n");
-    const targetValue = target(source, "directory");
+    const targetValue = await target(source);
     const plannedOutput = join(root, "planned-output");
 
     const dryResult = await new ArtifactProvider(process.env)
@@ -190,6 +200,16 @@ describe("artifact extraction dry-run", () => {
     expect(parsedDry.dry_run).toBe(true);
     expect(parsedDry.artifacts).toEqual([
       expect.objectContaining({
+        relative_path: "Info.plist",
+        bytes_written: 0,
+        created: false,
+      }),
+      expect.objectContaining({
+        relative_path: "Main",
+        bytes_written: 0,
+        created: false,
+      }),
+      expect.objectContaining({
         relative_path: "nested/item.txt",
         bytes_written: 0,
         created: false,
@@ -197,6 +217,16 @@ describe("artifact extraction dry-run", () => {
     ]);
     expect(parsedDry.plan).toMatchObject({
       entries: [
+        expect.objectContaining({
+          logical_path: "Info.plist",
+          entry_kind: "file",
+          status: "planned",
+        }),
+        expect.objectContaining({
+          logical_path: "Main",
+          entry_kind: "file",
+          status: "planned",
+        }),
         expect.objectContaining({
           logical_path: "nested",
           entry_kind: "directory",
@@ -211,16 +241,14 @@ describe("artifact extraction dry-run", () => {
         }),
       ],
       totals: {
-        planned_files: 1,
+        planned_files: 3,
         unsupported_entries: 1,
         unresolved_entries: 0,
-        observed_bytes_estimate: 12,
-        declared_bytes_estimate: 12,
         byte_totals_basis: "declared-and-observed-content-estimates",
       },
     });
     await expect(access(plannedOutput)).rejects.toThrow();
-    expect(await readdir(root)).toEqual(["source"]);
+    expect(await readdir(root)).toEqual(["source.app"]);
 
     await mkdir(plannedOutput);
     const existingRefusal = await new ArtifactProvider(process.env)
@@ -238,6 +266,90 @@ describe("artifact extraction dry-run", () => {
     });
   });
 });
+
+describe("artifact extraction dry-run CLI", () => {
+  it("exposes --plan-offset and --plan-limit on CLI extract-artifact and requires --dry-run", async () => {
+    const source = "/tmp/fake-source.app";
+    const registeredCommands = new Map<
+      string,
+      {
+        run: (context: {
+          args: { path: string };
+          options: {
+            integrityPolicy: "fail" | "record-and-continue";
+            dryRun: boolean;
+            planOffset?: number;
+            planLimit?: number;
+          };
+        }) => Promise<unknown>;
+      }
+    >();
+    const fakeCli = {
+      command: (name: string, definition: { run: unknown }) => {
+        registeredCommands.set(name, definition as never);
+      },
+    } as unknown as CliInstance;
+    const providerCalls: {
+      path: string;
+      operation: string;
+      params: unknown;
+    }[] = [];
+    registerArtifactCommands(fakeCli, pino({ level: "silent" }), (async (
+      targetPath: string,
+      operation: string,
+      params: unknown,
+    ) => {
+      providerCalls.push({ path: targetPath, operation, params });
+      return ok({} as never);
+    }) as unknown as DirectAnalysis["runProviderAnalysis"]);
+    const extractCmd = registeredCommands.get("extract-artifact");
+    expect(extractCmd).toBeDefined();
+
+    const rejectedWithoutDryRun = await extractCmd!.run({
+      args: { path: source },
+      options: {
+        integrityPolicy: "fail",
+        dryRun: false,
+        planOffset: 10,
+      },
+    });
+    expect(providerCalls).toHaveLength(0);
+    expect(rejectedWithoutDryRun).toMatchObject({
+      category: "invalid_input",
+      code: "invalid_request",
+      details: {
+        operation: "extract_artifact",
+        issues: [
+          {
+            path: ["plan_offset"],
+            message: "plan_offset requires dry_run=true.",
+          },
+        ],
+      },
+    });
+
+    await extractCmd!.run({
+      args: { path: source },
+      options: {
+        integrityPolicy: "fail",
+        dryRun: true,
+        planOffset: 10,
+        planLimit: 25,
+      },
+    });
+    expect(providerCalls).toHaveLength(1);
+    expect(providerCalls[0]).toMatchObject({
+      path: source,
+      operation: "extract_artifact",
+      params: {
+        integrity_policy: "fail",
+        dry_run: true,
+        plan_offset: 10,
+        plan_limit: 25,
+      },
+    });
+  });
+});
 const inventory = async (targetValue: BinaryTarget) => {
   const result = await new ArtifactProvider(process.env)
     .createClient(targetValue)
@@ -246,13 +358,15 @@ const inventory = async (targetValue: BinaryTarget) => {
   return artifactInventoryResultSchema.parse(result.value.result);
 };
 
-const target = (
-  path: string,
-  format: Extract<BinaryTarget, { kind: "archive" }>["format"] | "directory",
-): BinaryTarget => ({
-  path,
-  sourcePath: path,
-  sha256: "0".repeat(64),
-  kind: "archive",
-  format: format === "directory" ? "asar" : format,
-});
+/** A real bundle target has an executable identity distinct from its resource tree. */
+const target = async (path: string): Promise<BinaryTarget> => {
+  await writeFile(
+    join(path, "Info.plist"),
+    '<plist version="1.0"><dict><key>CFBundleExecutable</key><string>Main</string></dict></plist>',
+  );
+  await writeFile(join(path, "Main"), machoImage({ cpu: CPU.arm64 }));
+  const parsed = await parseBinaryTarget(path);
+  if (!parsed.ok) throw parsed.error;
+  expect(parsed.value.bundleInfoPlist).toBe(join(path, "Info.plist"));
+  return parsed.value;
+};

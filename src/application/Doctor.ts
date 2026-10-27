@@ -17,7 +17,7 @@ import {
 } from "../config/parseConfig.js";
 import { homeDirectoryFromEnvironment } from "../config/homeDirectory.js";
 import { snapshotEnvironment } from "../process/snapshotEnvironment.js";
-import { join } from "node:path";
+import { appendCallerPath } from "../filesystem/callerPath.js";
 
 import { analysisErrorRemediationAction } from "../domain/analysisErrorPresentation.js";
 import { BinaryTargetError } from "../domain/configurationErrors.js";
@@ -138,8 +138,6 @@ export interface DoctorHost {
   providerInspections?(): Promise<readonly DoctorProviderInspection[]>;
   /** Resolve a parsed upstream request budget from the effective client environment. */
   resolveProviderRequestBudget?: ProviderRequestBudgetResolver;
-  /** Validated provider settings preserved by setup, independent of readiness. */
-  providerRegistrationEnvironment?(): Readonly<Record<string, string>>;
   installationPaths?(): Promise<readonly string[]>;
   /** Undefined checks installed skill roots; explicit selections stay scoped. */
   installedSkillIdentity?(
@@ -523,9 +521,6 @@ export interface SystemDoctorHostOptions {
     resourceScope: RetainedResourceScope,
     signal: AbortSignal,
   ) => Promise<readonly DoctorProviderInspection[]>;
-  readonly providerRegistrationEnvironment?: () => Readonly<
-    Record<string, string>
-  >;
   readonly resolveProviderRequestBudget?: (
     provider: Parameters<ProviderRequestBudgetResolver>[0],
     environment: Parameters<ProviderRequestBudgetResolver>[1],
@@ -713,7 +708,10 @@ export const systemDoctorHost = (
         );
         return appdir === undefined
           ? undefined
-          : join(appdir, "Hopper Disassembler.app/Contents/MacOS/hopper");
+          : appendCallerPath(
+              appdir,
+              "Hopper Disassembler.app/Contents/MacOS/hopper",
+            );
       });
     },
     manualHopperPaths: () =>
@@ -725,12 +723,6 @@ export const systemDoctorHost = (
             resources.run(() =>
               options.providerInspections!(resourceScope, inspectionSignal),
             ),
-        }),
-    ...(options.providerRegistrationEnvironment === undefined
-      ? {}
-      : {
-          providerRegistrationEnvironment:
-            options.providerRegistrationEnvironment,
         }),
     ...(resolveProviderRequestBudget === undefined
       ? {}

@@ -74,6 +74,17 @@ Connect Fiddler Everywhere's MCP server separately for HTTP traffic debugging,
 preserving your REA client entry. See the
 [setup instructions and public skills](web-network-captures.md#fiddler-everywhere-mcp-and-public-skills).
 
+## VS Code
+
+`rea setup --client vscode` configures the default VS Code user profile's
+`mcp.json`. Setup honors `VSCODE_PORTABLE` and `VSCODE_APPDATA` when they are
+present in its environment. It cannot infer a running window's named profile
+or `--user-data-dir`; configure that profile separately when needed.
+
+`rea setup --client copilot_cli` instead configures Copilot's user
+`mcp-config.json`. VS Code can forward eligible profile servers to Copilot
+sessions; see the [VS Code MCP configuration reference](https://code.visualstudio.com/docs/agents/reference/mcp-configuration).
+
 ## GitHub Copilot CLI
 
 Setup preserves an existing `tools` selection in the REA registration, including
@@ -659,8 +670,10 @@ become active again. Malformed applicable files block setup before changes.
 Grok Build loads `[mcp_servers.rea]` from `$GROK_HOME/config.toml`, or from
 `~/.grok/config.toml` when `GROK_HOME` is unset or empty. Setup edits that server
 table, `[mcp_servers.rea.env]`, and a root `disabled_mcp_servers` entry that
-names `rea`. It sets `startup_timeout_sec = 30` and leaves every other name
-in that list. The shared skill installed under `~/.agents/skills` is already
+names `rea`. It defaults `startup_timeout_sec` to 30 seconds, preserves an
+existing positive timeout, and leaves every other name in that list.
+[Grok supports longer startup timeouts](https://docs.x.ai/build/features/mcp-servers)
+for cold package-runner launches. The shared skill installed under `~/.agents/skills` is already
 on Grok Build's skill path.
 
 Grok Bot (`grok_bot`) is detected from `~/.grokbot`, or from `SAND_DATA_ROOT`

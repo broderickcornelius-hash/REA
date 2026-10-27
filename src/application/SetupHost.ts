@@ -196,6 +196,7 @@ export const systemSetupHost = (
     materializeRegistrationRunnerCache(
       registration.registrationCommand,
       environment,
+      resources,
     );
   const cleanup = new SetupCleanupOwner([
     macCleanup,
@@ -230,7 +231,6 @@ export const systemSetupHost = (
       const diagnosis = await runDoctor(undefined, doctorHost, scope);
       const providerEnvironment: SetupProviderEnvironment = {
         ...providerRegistrationEnvironment(diagnosis.providerInspections ?? []),
-        ...doctorHost.providerRegistrationEnvironment?.(),
         ...(diagnosis.hopperPath === undefined
           ? {}
           : { HOPPER_LAUNCHER_PATH: diagnosis.hopperPath }),

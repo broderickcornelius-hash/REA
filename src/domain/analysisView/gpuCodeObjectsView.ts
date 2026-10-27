@@ -193,10 +193,10 @@ const readGpuFacts = (
     };
     if (reusable) checkedGpu.set(report, checked);
   }
+  const subject = parent.subject;
   if (
-    parent.subject != null &&
-    (parent.subject.local_path !== checked.report.artifact.path ||
-      parent.subject.digest.sha256 !== checked.report.artifact.sha256)
+    subject != null &&
+    subject.digest.sha256 !== checked.report.artifact.sha256
   )
     return err(
       analysisViewInputError([

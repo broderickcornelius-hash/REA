@@ -491,6 +491,11 @@ Dispatching a provider metadata write invalidates the active session's snapshot 
 even if its reply fails: the provider may already have applied the write.
 Close and reopen the target before importing or saving another snapshot.
 
+Saved snapshots include only cache entries whose subject identifies the selected
+target. Unbound observations and observations of child artifacts remain available
+in the open session and its Evidence bundle; they are excluded from the target's
+saved replay entries without changing their subjects.
+
 Snapshots retain eligible target-scoped question histories in full, including
 mutation Evidence recorded while another target was active. Observations and
 related questions must still belong to the saved target. If those dependencies
@@ -545,6 +550,9 @@ rea evidence-export /absolute/path/to/evidence/bundle.json /absolute/path/to/evi
 rea compare /absolute/path/to/evidence/left.json /absolute/path/to/evidence/right.json
 rea compare left.json right.json --record_pairs '[{"left_evidence_id":"ev_<left-sha256>","right_evidence_id":"ev_<right-sha256>"}]' --json
 ```
+
+Migration: replace `rea compare-bundles` with `rea compare`; the former command
+has been removed. The MCP tool remains `compare_bundles`.
 
 `--record_pairs` supplies an explicit JSON array of observation pairs, matching
 MCP `compare_bundles.record_pairs`. Pair IDs must exist on their named sides and
@@ -982,10 +990,10 @@ Cutter when available. This is separate from `--format json`, which selects the
 CLI result representation; the global `--json` flag selects that same CLI
 representation.
 
-Cutter still accepts deprecated `--json=true` and `--json=false` compatibility
-values. When both forms are present, `--json-output` takes precedence in either
-argument order. Bare `--json` retains its global meaning of selecting JSON CLI
-output formatting.
+Cutter no longer accepts command-local `--json=true` or `--json=false`.
+Replace these with `--json-output=true` or `--json-output=false`, respectively.
+Combine `--json-output` with bare `--json` when both Cutter command output and
+the CLI result should use JSON; either argument order is accepted.
 
 | Status    | Meaning                                                                                                                                                                                                                                                                                                                                                                                |
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

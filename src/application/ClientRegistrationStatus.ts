@@ -41,6 +41,7 @@ import type { ArtifactResourceScope } from "../artifacts/ArtifactResourceScope.j
 
 import {
   parseClientRegistration,
+  clientRegistrationOwnershipRemediation,
   setupPreservesDisabledActivation,
   type ClientRegistration,
 } from "./ClientRegistration.js";
@@ -332,7 +333,12 @@ export const readClientRegistrationInspections = async (
                 policyBlock === undefined
               ? "aligned"
               : "stale",
-          policyBlock ??
+          (parsed.dialect !== "dsh" && commandFacts.identity !== "owned"
+            ? clientRegistrationOwnershipRemediation(commandFacts.identity, [
+                configPath,
+              ])
+            : undefined) ??
+            policyBlock ??
             (packageVersionDrift
               ? packageVersionRemediation(packageReference ?? "", client)
               : alignment === "unknown"
@@ -441,8 +447,7 @@ const registrationAligned = ({
   if (identity === "foreign") return "stale";
   if (
     client.name === "grok_build" &&
-    registration.startup_timeout_sec !==
-      MCP_STARTUP_POLICY.codexStartupTimeoutSeconds
+    registration.startup_timeout_sec === undefined
   )
     return "stale";
   if (

@@ -1,3 +1,7 @@
+import {
+  isBrowserNetworkRequest,
+  isFetchCall,
+} from "./javascriptNetworkRequests.js";
 import * as t from "@babel/types";
 import { isIntrinsicMapLookup } from "./javascriptSemanticMapOperations.js";
 import { traverseJavaScriptValueAst } from "./javascriptSemanticTraversal.js";
@@ -19,6 +23,7 @@ import {
   rangeForOffsets,
   sourceSlice,
   stringValue,
+  staticFileExpressionPath,
 } from "./javascriptStaticAnalysisHelpers.js";
 import {
   semanticStaticPropertyKey,
@@ -149,40 +154,54 @@ export const inspectCall = (
   inspectStorageCall(node, name, first, context, bindings);
   if (
     (name === "loadFile" || name.endsWith(".loadFile")) &&
-    context.rendererLoad?.(node.callee, node) === true &&
-    first !== undefined
-  )
-    addLocatedFinding(context, {
-      collection: accumulator.roles,
-      key: `role\0renderer\0${first}`,
-      node,
-      value: {
-        role: "renderer",
-        path: first,
-        resolution_context: "filesystem-expression",
-        mechanism: `call:${name}`,
-        module_key: null,
-        location: range(node),
-      },
-    });
+    context.rendererLoad?.(node.callee, node) === true
+  ) {
+    const argument = argumentNode(node.arguments[0]);
+    const filePath =
+      first === undefined && argument !== undefined
+        ? staticFileExpressionPath(argument, context.pathIntrinsics)
+        : first === undefined
+          ? undefined
+          : { path: first, base: "literal-path" as const };
+    if (filePath === undefined) accumulator.unknownFindings += 1;
+    else
+      addLocatedFinding(context, {
+        collection: accumulator.roles,
+        key: `role\0renderer\0${filePath.path}\0${filePath.base}`,
+        node,
+        value: {
+          role: "renderer",
+          path: filePath.path,
+          ...(filePath.base === "source-directory"
+            ? { path_base: "source-directory" as const }
+            : {}),
+          resolution_context: "filesystem-expression",
+          mechanism: `call:${name}`,
+          module_key: null,
+          location: range(node),
+        },
+      });
+  }
   if (
     (name === "loadURL" || name.endsWith(".loadURL")) &&
-    context.rendererLoad?.(node.callee, node) === true &&
-    first !== undefined
-  )
-    addLocatedFinding(context, {
-      collection: accumulator.roles,
-      key: `role\0renderer\0${first}`,
-      node,
-      value: {
-        role: "renderer",
-        path: first,
-        resolution_context: "module-specifier",
-        mechanism: `call:${name}`,
-        module_key: null,
-        location: range(node),
-      },
-    });
+    context.rendererLoad?.(node.callee, node) === true
+  ) {
+    if (first === undefined) accumulator.unknownFindings += 1;
+    else
+      addLocatedFinding(context, {
+        collection: accumulator.roles,
+        key: `role\0renderer\0${first}`,
+        node,
+        value: {
+          role: "renderer",
+          path: first,
+          resolution_context: "module-specifier",
+          mechanism: `call:${name}`,
+          module_key: null,
+          location: range(node),
+        },
+      });
+  }
 };
 
 const moduleUrlSpecifier = (
@@ -476,13 +495,6 @@ export const indexVitePreloadDependencyTable = (
   return escapedOrMutated ? dependencies.map(() => undefined) : dependencies;
 };
 
-const isFetchCall = (
-  node: t.Node,
-  bindings: JavaScriptSemanticAnalysisState,
-): boolean =>
-  (t.isCallExpression(node) || t.isOptionalCallExpression(node)) &&
-  isUnmodifiedGlobalReference(node.callee, bindings, "fetch");
-
 const requestConstructorUrl = (
   node: t.Node,
   bindings: JavaScriptSemanticAnalysisState,
@@ -503,7 +515,7 @@ const inspectEndpointCall = (
   context: FindingContext,
   bindings: JavaScriptSemanticAnalysisState,
 ): void => {
-  if (isKnownNetworkRequest(node, bindings)) {
+  if (isKnownNetworkRequest(node, bindings, context)) {
     const target = argumentNode(node.arguments[0]);
     if (target === undefined) return;
     const literal =
@@ -576,7 +588,10 @@ const inspectLiteralEndpointCall = (
       kind: "network",
       value: endpoint.value,
       mechanism: `call:${name}`,
-      ...(endpoint.kind === "candidate" ? { interpretation: "candidate" } : {}),
+      ...(endpoint.kind === "candidate" &&
+      context.xhrOpenRequest?.(node) !== true
+        ? { interpretation: "candidate" }
+        : {}),
     });
 };
 
@@ -594,21 +609,18 @@ const isNetworkRequestSpelling = (name: string): boolean =>
 const isKnownNetworkRequest = (
   node: JavaScriptCallLike,
   bindings: JavaScriptSemanticAnalysisState,
+  context: FindingContext,
 ): boolean => {
-  if (isFetchCall(node, bindings)) return true;
+  if (isBrowserNetworkRequest(node, bindings)) return true;
+  const callee = unwrapJavaScriptExpression(node.callee).node;
   if (
-    t.isNewExpression(node) &&
-    (isUnmodifiedGlobalReference(node.callee, bindings, "WebSocket") ||
-      isUnmodifiedGlobalReference(node.callee, bindings, "EventSource"))
+    (t.isCallExpression(node) || t.isOptionalCallExpression(node)) &&
+    (t.isMemberExpression(callee) || t.isOptionalMemberExpression(callee)) &&
+    semanticStaticPropertyKey(callee.property, callee.computed) === "loadURL" &&
+    context.rendererLoad?.(node.callee, node) === true
   )
     return true;
-  return (
-    (t.isCallExpression(node) || t.isOptionalCallExpression(node)) &&
-    isUnmodifiedGlobalReference(node.callee, bindings, [
-      "navigator",
-      "sendBeacon",
-    ])
-  );
+  return false;
 };
 
 /** Finish queued targets after shared member-mutation facts are indexed. */
@@ -618,7 +630,7 @@ export const finishPartialNetworkEndpoints = (
   index: JavaScriptBindingIndex,
 ): void => {
   for (const { node, name } of context.accumulator.pendingNetworkCalls) {
-    if (!isKnownNetworkRequest(node, bindings)) {
+    if (!isKnownNetworkRequest(node, bindings, context)) {
       if (!isIntrinsicMapLookup(node, bindings, index))
         inspectLiteralEndpointCall(node, name, context);
       continue;

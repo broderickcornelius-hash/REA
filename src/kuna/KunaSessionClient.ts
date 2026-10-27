@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import {
   regularFileCancellation,
   RegularFileCleanupFailure,
@@ -33,7 +34,7 @@ import {
 import type { BinaryTarget } from "../domain/binaryTargetTypes.js";
 import type { EvidenceLocation } from "../domain/evidence.js";
 import { combineFunctionRelationshipCoverage } from "../domain/functionCallCoverage.js";
-import { functionDossierSchema } from "../domain/hopperValues.js";
+import { functionDossierSchema } from "../domain/native/functionDossier.js";
 import { analysisInputErrorFromIssues } from "../domain/inputIssueProjection.js";
 import type { JsonValue } from "../domain/jsonValue.js";
 import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
@@ -1561,6 +1562,7 @@ export class KunaSessionClient implements AnalysisClient {
   async #lookupOrBuild(installation: KunaInstallation): Promise<void> {
     const key = kunaProjectKey({
       targetSha256: this.#target.sha256,
+      targetBasename: basename(this.#target.path),
       kunaSha256: installation.sha256,
       kunaCommand: installation.configuration.command,
       kunaExecutable: installation.executable,

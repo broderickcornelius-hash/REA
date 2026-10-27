@@ -26,6 +26,10 @@ can be passed directly to `compare_functions`, and `inspect_artifact` Evidence
 to `compare_artifacts`. Use `get_evidence_bundle` when the task needs broader
 retained session history or an explicit bundle for transfer.
 
+`compare_artifacts` can also resolve an artifact summary to its exact retained
+parent in the session. Supported historical summaries keep their original
+Evidence identity and omissions; a missing or mismatched parent is rejected.
+
 `analyze_function` does not deliver its complete record by default. Without
 `detail`, it retains the complete dossier in the session and returns
 `inspect_analysis_view` summary Evidence whose
@@ -1206,7 +1210,18 @@ attachment. Native checksum verification failures still refuse traversal;
 Occurrences use normalized logical paths for identity and lookup. Optional
 `source_path` retains the original path within the owning reader when Unicode
 NFC or reader admission changes its spelling; it is source evidence, not an
-output destination. POSIX letter-colon names such as `a:b` remain valid logical
+output destination. New ASAR file occurrences explicitly record the boolean
+`unpacked`: `true` identifies a companion file and `false` identifies a packed
+entry. This field describes archive storage, independently of whether the bytes
+were available or passed integrity verification. Older occurrences may omit it;
+omission remains unknown and must not be defaulted to `false`. Consumers that
+previously accepted only literal `true` must also accept `false`, while retaining
+support for omitted historical values.
+`compare_artifacts` reports a metadata change when both storage values are
+known and differ. If only one value is known, storage comparison is unknown;
+when both are omitted, storage is not compared.
+
+POSIX letter-colon names such as `a:b` remain valid logical
 names; Windows extraction refuses names its filesystem cannot materialize.
 
 Extraction materializes regular files exposed by the active archive reader.
@@ -1222,8 +1237,8 @@ to write), `unsupported` (directories, logical metadata declarations, or nested
 archive members that single-container extraction does not expand), or
 `unresolved` (symlinks, case-folding or length-limit paths that cannot be
 verified without creating files, or non-file entries that drifted from the
-inventory snapshot). `plan.page` bounds `plan.entries` per call (`plan_offset` default `0`,
-`plan_limit` default `500`, maximum `1000`) and reports `total_entries`,
+inventory snapshot). `plan.page` bounds `plan.entries` per call (`plan_offset` / `--plan-offset` default `0`,
+`plan_limit` / `--plan-limit` default `500`, maximum `1000`, also capped by serialized page byte budget) and reports `total_entries`,
 `offset`, `limit`, `returned_entries`, `next_offset`, and `truncated` while
 `plan.totals` always summarizes the complete inventory. `plan.totals` reports
 `planned_files`, `unsupported_entries`, `unresolved_entries`,
@@ -1494,6 +1509,8 @@ validates every result before delivery. On catalogs large enough that full
 input schemas alone approach the frame limit, keep the input profile at its
 `compact` default as well; with full input schemas the advertisement is
 dominated by the input side.
+The full input profile has no one-megabyte catalog-frame guarantee, including
+when output schemas are omitted.
 
 Only client-side schema discovery and validation are reduced or omitted, so
 hosts using these profiles should rely on REA's validation and retain their

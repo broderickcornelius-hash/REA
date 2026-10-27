@@ -84,6 +84,13 @@ For an existing configuration, setup and uninstall recovery refuse a detected
 replacement or edit and name the recovery backup. Quit clients before editing their configuration;
 these checks do not lock out another writer modifying the same file in place,
 or exclude pathname changes between the final check and publication.
+Setup refreshes an existing `rea` registration only when its launcher proves REA
+ownership. Foreign or unresolved launcher identity blocks setup before any
+backup or write, including an OpenCode legacy entry that migration would remove.
+Review the existing launcher and manually rename or remove that registration to
+approve replacing it. A different existing installation path is foreign to the
+current entrypoint; a path that cannot be resolved remains unknown. Cordis uses
+its stable REA entry ID instead of launcher identity.
 Setup also retains valid environment overrides in REA's existing server entry,
 such as `REA_MCP_INPUT_SCHEMA_PROFILE`, `REA_MCP_OUTPUT_SCHEMA_PROFILE`, and
 `REA_MCP_MAX_RESPONSE_BYTES`, and `REA_MCP_TOOL_FAMILIES`.
@@ -204,7 +211,8 @@ identity remains available at `identity.catalog`.
 
 Setup pins package-runner MCP registrations to the exact installed REA version,
 installs the matching skill and on-demand references in the same plan, and adds
-`startup_timeout_sec = 30` for Codex and Grok Build. Codex also receives a
+`startup_timeout_sec = 30` for Codex and Grok Build when no positive timeout
+is already configured. Codex also receives a
 `tool_timeout_sec` derived from known provider startup plus operation headroom.
 
 ## Limit REA to one project or agent profile
@@ -981,7 +989,7 @@ copying license secrets into logs, or killing unrelated Hopper processes.
 
 REA connects to an existing Ghidra installation on Linux x64/arm64, macOS x64/arm64,
 or experimental Windows x64 P0.
-It accepts Ghidra 12.1.x and the 64-bit full JDK declared by that installation's
+It accepts Ghidra 12.x (>=12.1) and the 64-bit full JDK declared by that installation's
 `application.java.min` and `application.java.max`. The JDK's reported platform must also
 map to the same native decompiler directory as the host: a JDK running under
 emulation (for example x86_64 under Rosetta on Apple silicon) or reporting a
@@ -989,7 +997,8 @@ non-host `os.name` fails the doctor
 even when it is an otherwise accepted 64-bit full JDK. Select a matching JDK
 through `JAVA_HOME`; adding another decompiler in the JVM-selected directory
 does not satisfy this host-validated admission rule. Current 12.1 releases require
-JDK 21 or newer and set no maximum. The bridge is verified with Ghidra 12.1.4
+JDK 21 or newer; Ghidra 12.2 declares JDK 25 or newer. Neither sets a maximum.
+The bridge is verified with Ghidra 12.1.4
 and JDK 21. Each installation must include the native decompiler for the host
 architecture in `Ghidra/Features/Decompiler/os/<platform>/` or the corresponding
 `build/os/<platform>/` directory. Linux ARM64 uses `linux_arm_64`; official
@@ -1104,7 +1113,7 @@ the application metadata and headless launcher. An explicitly supplied
 REA reports that error instead of silently selecting another installation.
 This discovery is read-only and does not execute the Ghidra launcher.
 
-Doctor validates the platform, architecture, Ghidra 12.1.x application version,
+Doctor validates the platform, architecture, Ghidra 12.x (>=12.1) application version,
 `support/analyzeHeadless` or `support/analyzeHeadless.bat`, the installation's
 Java major range, 64-bit JDK bitness, and the presence of `javac`/`javac.exe`.
 It also checks that the reported JVM `os.arch` and `os.name` map to the same native decompiler

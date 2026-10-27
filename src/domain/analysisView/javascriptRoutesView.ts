@@ -191,8 +191,6 @@ export const javaScriptRoutesViewSummarySchema = z.strictObject({
     unknown: z.int().nonnegative(),
   }),
 });
-export const javaScriptRoutesSourceReferenceSchema =
-  javaScriptRouteInventorySourceSchema;
 
 type Request = z.output<typeof javaScriptRoutesViewRequestSchema>;
 type Gap = z.infer<typeof javaScriptRouteGapSchema>;
@@ -346,11 +344,8 @@ export const projectJavaScriptRoutesView = (
       path: identity.data.input_path,
       sha256: identity.data.root_artifact_sha256,
     };
-    if (
-      parent.subject != null &&
-      (parent.subject.local_path !== artifact.path ||
-        parent.subject.digest.sha256 !== artifact.sha256)
-    )
+    const subject = parent.subject;
+    if (subject != null && subject.digest.sha256 !== artifact.sha256)
       return err(
         inputError(
           "Parent subject does not match its application artifact identity.",

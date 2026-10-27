@@ -56,6 +56,7 @@ import {
   extractArtifact,
   formatDryRunNonFileAddedLimitation,
   formatDryRunNonFileKindMismatchReason,
+  MAX_DRY_RUN_PLAN_PAGE_BYTES,
   formatDryRunPlanPageLimitation,
   formatExtractionIntegrityContradictionLimitation,
 } from "./ArtifactExtraction.js";
@@ -421,7 +422,7 @@ it.each([false, true] as const)(
 
 vi.mock("../pyinstaller/CArchiveLayout.js", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  containsPyInstallerArchive: () =>
+  observePyInstallerCookie: () =>
     Promise.reject(new ArtifactReaderFailure("format", "detection failed")),
 }));
 
@@ -1643,8 +1644,116 @@ it("revalidates transferred ZIP member and container bytes during dry-run, bound
       expect(page3.limitations).toContain(
         formatDryRunPlanPageLimitation(10, 40, 30, null),
       );
+      expect(page3.extraction_manifest.selected_occurrence_ids).toHaveLength(
+        10,
+      );
     } finally {
       lstatOverride = undefined;
+    }
+  } finally {
+    await resourceScope.close();
+  }
+});
+
+it("reuses validated dry-run plans across continuation pages, invalidates on mutation, and byte-budgets oversized paths", async () => {
+  const directory = await createTestTempDirectory("rea-dry-run-page-budget-");
+  const manyNamesArchive = join(directory, "many-names.zip");
+  const manyWriter = new ZipWriter(new Uint8ArrayWriter());
+  for (let index = 0; index < 40; index += 1) {
+    const name = `entry-${String(index).padStart(4, "0")}.txt`;
+    await manyWriter.add(name, new TextReader(`item-${String(index)}`));
+  }
+  await writeFile(manyNamesArchive, Buffer.from(await manyWriter.close()));
+  const pagedOutputRoot = join(directory, "paged-dry-out");
+  const resourceScope = new ArtifactResourceScope();
+  try {
+    await extractArtifact({
+      inputPath: manyNamesArchive,
+      inputFormat: "zip",
+      outputRoot: pagedOutputRoot,
+      dryRun: true,
+      planOffset: 0,
+      planLimit: 15,
+      environment: {},
+      integrityPolicy: "fail",
+      resourceScope,
+    });
+    {
+      // Verify continuation pages reuse the validated dry-run plan without re-hashing archive entries
+      const zipReadSpy = vi.spyOn(ZipArtifactReader.prototype, "entries");
+      try {
+        const cachedPage2 = await extractArtifact({
+          inputPath: manyNamesArchive,
+          inputFormat: "zip",
+          outputRoot: pagedOutputRoot,
+          dryRun: true,
+          planOffset: 15,
+          planLimit: 15,
+          environment: {},
+          integrityPolicy: "fail",
+          resourceScope,
+        });
+        expect(zipReadSpy).not.toHaveBeenCalled();
+        expect(cachedPage2.plan?.page).toEqual({
+          total_entries: 40,
+          offset: 15,
+          limit: 15,
+          returned_entries: 15,
+          next_offset: 30,
+          truncated: true,
+        });
+      } finally {
+        zipReadSpy.mockRestore();
+      }
+
+      // Mutating the source archive before a continuation page fails closed with an integrity error
+      await writeFile(manyNamesArchive, await zipBytes("mutated\n"));
+      await expect(
+        extractArtifact({
+          inputPath: manyNamesArchive,
+          inputFormat: "zip",
+          outputRoot: pagedOutputRoot,
+          dryRun: true,
+          planOffset: 15,
+          planLimit: 15,
+          environment: {},
+          integrityPolicy: "fail",
+          resourceScope,
+        }),
+      ).rejects.toMatchObject({
+        name: "ArtifactReaderFailure",
+        reason: "integrity",
+      });
+
+      // Byte-budgeted paging: 12 entries with ~50 KB paths stay within MAX_DRY_RUN_PLAN_PAGE_BYTES per page
+      const longNamesArchive = join(directory, "long-names-budget.zip");
+      const longWriter = new ZipWriter(new Uint8ArrayWriter());
+      for (let idx = 0; idx < 12; idx += 1) {
+        const prefix = `${"a".repeat(250)}/`.repeat(200);
+        await longWriter.add(
+          `${prefix}item-${String(idx).padStart(2, "0")}.txt`,
+          new TextReader(""),
+        );
+      }
+      await writeFile(longNamesArchive, Buffer.from(await longWriter.close()));
+      const longPage1 = await extractArtifact({
+        inputPath: longNamesArchive,
+        inputFormat: "zip",
+        outputRoot: join(directory, "long-names-dry-out"),
+        dryRun: true,
+        environment: {},
+        integrityPolicy: "fail",
+        resourceScope,
+      });
+      expect(longPage1.plan?.page?.truncated).toBe(true);
+      expect(longPage1.plan?.page?.returned_entries).toBeGreaterThanOrEqual(1);
+      expect(longPage1.plan?.page?.returned_entries).toBeLessThan(12);
+      expect(longPage1.plan?.page?.next_offset).toBe(
+        longPage1.plan?.page?.returned_entries,
+      );
+      expect(Buffer.byteLength(JSON.stringify(longPage1), "utf8")).toBeLessThan(
+        MAX_DRY_RUN_PLAN_PAGE_BYTES * 2,
+      );
     }
   } finally {
     await resourceScope.close();

@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import { workspaceCliTest } from "../../support/cli/workspaceCliFixture.js";
 
+import { normalizeCliArguments } from "../../../src/cliBuiltinArguments.js";
 import {
-  normalizeCliArguments,
   renderCliOutputArgumentError,
   renderCliDocument,
   renderEmptyFilteredCliOutput,
@@ -35,10 +35,10 @@ describe("CLI output argument boundary", () => {
   });
 
   it("formats arrays of empty objects without column keys as JSON in Markdown", () => {
-    expect(renderCliDocument([{}], "md", false)).toBe("[{}]\n");
-    expect(renderCliDocument([{}, {}], "md", false)).toBe("[{},{}]\n");
+    expect(renderCliDocument([{}], "md", false)).toBe("\\[{}\\]\n");
+    expect(renderCliDocument([{}, {}], "md", false)).toBe("\\[{},{}\\]\n");
     expect(renderCliDocument({ empty: [{}] }, "md", false)).toBe(
-      "## empty\n\n[{}]\n",
+      "## empty\n\n\\[{}\\]\n",
     );
   });
 
