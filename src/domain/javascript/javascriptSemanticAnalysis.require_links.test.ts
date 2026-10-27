@@ -6,6 +6,7 @@ import {
 } from "./javascriptSemanticAnalysis.js";
 import { parseJavaScriptSource } from "./javascriptSourceParser.js";
 import { moduleResolutionModeForJavaScriptReference } from "./javascriptModuleResolutionMode.js";
+import { analyzeJavaScriptStaticSource } from "./javascriptStaticAnalysis.js";
 import {
   origin,
   topLevelBinding,
@@ -147,6 +148,34 @@ describe("CommonJS wrapper parameter redeclarations", () => {
 });
 
 describe("TypeScript type-only module links", () => {
+  it.each([
+    'import type { Worker } from "node:worker_threads";',
+    'import { type Worker } from "node:worker_threads";',
+    'import type Worker from "./types";',
+    'import type * as Worker from "./types";',
+    'import type Worker = require("./types");',
+  ])(
+    "does not shadow a runtime constructor with erased syntax: %s",
+    (prefix) => {
+      const expression = 'new Worker(new URL("./worker.js", import.meta.url));';
+      const source = `${prefix}\n${expression}`;
+      expect(analyzeJavaScriptStaticSource(source).references).toContainEqual(
+        expect.objectContaining({
+          kind: "worker",
+          specifier: "./worker.js",
+          expression: null,
+        }),
+      );
+      expect(
+        analyzeJavaScriptStaticSource(
+          `${prefix}\nclass Worker {}\n${expression}`,
+        ).references,
+      ).toContainEqual(
+        expect.objectContaining({ kind: "worker", specifier: null }),
+      );
+    },
+  );
+
   it("retains declarations without runtime bindings or callable claims", () => {
     const ir = analyzeJavaScriptSemantics(`
       import type { Whole } from "./whole";

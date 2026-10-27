@@ -55,6 +55,7 @@ it.each([
       memberWrites: [],
       escapedPaths: [],
       definitions: [],
+      definitionNodes: [],
       initializers: [{ node: initializer, projection: [] }],
       referenceInitializers: [],
       directOrigins: [],
@@ -115,6 +116,7 @@ describe("parameter references copied into function body bindings", () => {
         memberWrites: [],
         escapedPaths: [],
         definitions: [],
+        definitionNodes: [],
         initializers: [entry, assigned],
         referenceInitializers: [],
         directOrigins: [],
@@ -125,4 +127,82 @@ describe("parameter references copied into function body bindings", () => {
       expect(origins.initializers).toContain(assigned);
     },
   );
+});
+
+it.each([
+  ["capture(); for (const item of items) { overwrite(); }", true],
+  ["for (const item of items) { capture(); overwrite(); }", false],
+  ["for (const item of items) { overwrite(); } capture();", false],
+  [
+    "capture(); for (const item of items) { for (const child of item) { overwrite(); } }",
+    true,
+  ],
+  [
+    "for (const item of items) { capture(); for (const child of item) { overwrite(); } }",
+    false,
+  ],
+  ["capture(); function later() { overwrite(); }", false],
+])(
+  "orders an external capture before a repeating effect without ordering repeated captures: %s",
+  (source, follows) => {
+    const program = parseJavaScriptSource(source)?.program;
+    if (program === undefined)
+      throw new Error("Expected parsed ordering fixture");
+    const parents = new WeakMap<t.Node, t.Node>();
+    let capture: t.Node | undefined;
+    let effect: t.Node | undefined;
+    traverseJavaScriptAst(program, {
+      enter: (node, parent) => {
+        if (parent !== null) parents.set(node, parent);
+        if (
+          t.isCallExpression(node) &&
+          t.isIdentifier(node.callee, { name: "capture" })
+        )
+          capture = node;
+        if (
+          t.isCallExpression(node) &&
+          t.isIdentifier(node.callee, { name: "overwrite" })
+        )
+          effect = node;
+      },
+    });
+    if (capture === undefined || effect === undefined)
+      throw new Error("Expected capture and effect calls");
+    expect(semanticTopLevelEffectFollowsCapture(capture, effect, parents)).toBe(
+      follows,
+    );
+  },
+);
+
+it("keeps repeating effect and capture positions distinct across repeated queries", () => {
+  const program = parseJavaScriptSource(
+    "capture(); for (const item of items) { overwrite(); } after();",
+  )?.program;
+  if (program === undefined)
+    throw new Error("Expected parsed ordering fixture");
+  const parents = new WeakMap<t.Node, t.Node>();
+  const calls = new Map<string, t.CallExpression>();
+  traverseJavaScriptAst(program, {
+    enter: (node, parent) => {
+      if (parent !== null) parents.set(node, parent);
+      if (t.isCallExpression(node) && t.isIdentifier(node.callee))
+        calls.set(node.callee.name, node);
+    },
+  });
+  const capture = calls.get("capture");
+  const effect = calls.get("overwrite");
+  const after = calls.get("after");
+  if (capture === undefined || effect === undefined || after === undefined)
+    throw new Error("Expected ordering calls");
+  for (let iteration = 0; iteration < 2; iteration += 1) {
+    expect(semanticTopLevelEffectFollowsCapture(capture, effect, parents)).toBe(
+      true,
+    );
+    expect(semanticTopLevelEffectFollowsCapture(effect, after, parents)).toBe(
+      false,
+    );
+    expect(semanticTopLevelEffectFollowsCapture(capture, effect, parents)).toBe(
+      true,
+    );
+  }
 });

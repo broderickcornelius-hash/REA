@@ -5,6 +5,8 @@ import {
   semanticComputedMethodKey,
   semanticBranchMayBeSkipped,
   semanticIterationCardinality,
+  semanticPatternInitializationPrecedesRead,
+  type SemanticExecutionFrame,
 } from "./javascriptSemanticEvaluationOrder.js";
 
 import {
@@ -52,6 +54,8 @@ interface InitializerPositionCache {
   readonly mutation: WeakMap<t.Node, StatementPosition | null>;
   readonly reference: WeakMap<t.Node, StatementPosition | null>;
   readonly read: WeakMap<t.Node, BindingReadPosition>;
+  readonly topLevelCaptures: WeakMap<t.Node, StatementPosition | null>;
+  readonly topLevelEffects: WeakMap<t.Node, StatementPosition | null>;
   readonly evaluationChildren: WeakMap<
     t.Node,
     ReadonlyMap<t.Node, number> | null
@@ -76,6 +80,8 @@ const initializerPositionCache = (
     mutation: new WeakMap(),
     reference: new WeakMap(),
     read: new WeakMap(),
+    topLevelCaptures: new WeakMap(),
+    topLevelEffects: new WeakMap(),
     evaluationChildren: new WeakMap(),
     expressionAncestry: undefined,
   };
@@ -120,32 +126,61 @@ const positionPrecedes = (
       left.declaratorIndex >= 0 &&
       left.declaratorIndex < right.declaratorIndex));
 
-/** Order effects only in a non-repeating top-level activation. */
+const computeTopLevelPosition = (
+  node: t.Node | undefined,
+  parents: WeakMap<t.Node, t.Node>,
+  repeatingEffect: boolean,
+): StatementPosition | null => {
+  let selected: StatementPosition | null = null;
+  let declarator: t.VariableDeclarator | undefined;
+  let child: t.Node | undefined;
+  while (node !== undefined) {
+    if (t.isFunction(node)) return null;
+    if (t.isLoop(node)) {
+      if (!repeatingEffect) return null;
+      // A capture outside the loop may precede the entire repeating region.
+      // Captures within it remain unordered across iterations.
+      selected = null;
+      declarator = undefined;
+    }
+    if (delayedInstanceFieldValue(node, child)) return null;
+    if (t.isVariableDeclarator(node)) declarator = node;
+    if (t.isStatement(node)) {
+      const enclosing = statementPosition(node, parents, declarator);
+      if (enclosing !== null) selected = enclosing;
+    }
+    if (t.isProgram(node)) return selected;
+    child = node;
+    node = parents.get(node);
+  }
+  return null;
+};
+
+/** Order effects after a capture only in a non-repeating capture activation. */
 export const semanticTopLevelEffectFollowsCapture = (
   capture: t.Node,
   effect: t.Node | undefined,
   parents: WeakMap<t.Node, t.Node>,
 ): boolean => {
-  const position = (node: t.Node | undefined): StatementPosition | null => {
-    let selected: StatementPosition | null = null;
-    let declarator: t.VariableDeclarator | undefined;
-    let child: t.Node | undefined;
-    while (node !== undefined) {
-      if (t.isFunction(node) || t.isLoop(node)) return null;
-      if (delayedInstanceFieldValue(node, child)) return null;
-      if (t.isVariableDeclarator(node)) declarator = node;
-      if (t.isStatement(node)) {
-        const enclosing = statementPosition(node, parents, declarator);
-        if (enclosing !== null) selected = enclosing;
-      }
-      if (t.isProgram(node)) return selected;
-      child = node;
-      node = parents.get(node);
-    }
-    return null;
+  const cache = initializerPositionCache(parents);
+  const position = (
+    node: t.Node | undefined,
+    repeatingEffect = false,
+  ): StatementPosition | null => {
+    if (node === undefined) return null;
+    // A repeating node may be an ordered effect but never a single capture.
+    // Retain only node facts in the existing parent-map-owned cache, not pairs.
+    const positions = repeatingEffect
+      ? cache.topLevelEffects
+      : cache.topLevelCaptures;
+    const cached = positions.get(node);
+    if (cached !== undefined) return cached;
+    const computed = computeTopLevelPosition(node, parents, repeatingEffect);
+    positions.set(node, computed);
+    return computed;
   };
   const before = position(capture);
-  const after = position(effect);
+  const after = position(effect, true);
   if (before === null || after === null) return false;
   if (positionPrecedes(before, after)) return true;
   if (
@@ -154,7 +189,14 @@ export const semanticTopLevelEffectFollowsCapture = (
     before.declaratorIndex !== after.declaratorIndex
   )
     return false;
-  return expressionEvaluationOrder(capture, effect, parents) === "before";
+  const patternOrder =
+    effect === undefined
+      ? undefined
+      : semanticPatternInitializationPrecedesRead(capture, effect, parents);
+  return (
+    patternOrder ??
+    expressionEvaluationOrder(capture, effect, parents) === "before"
+  );
 };
 
 const scopeExitMarkers = new WeakMap<t.Node, t.EmptyStatement>();
@@ -755,6 +797,40 @@ const bindingReadPosition = (
   return result;
 };
 
+/** Source order cannot protect a capture reused by another activation. */
+export const semanticCaptureActivationIsSingle = (
+  frames: readonly SemanticExecutionFrame[],
+  state: JavaScriptSemanticAnalysisState,
+): boolean => {
+  const owners = new Set<t.Node>();
+  for (const { owner, point } of frames) {
+    if (
+      bindingReadPosition(point, state.parentsByNode).repeatingLoop !==
+      undefined
+    )
+      return false;
+    // Even identical source points can represent separate recursive calls.
+    if (owners.has(owner)) return false;
+    owners.add(owner);
+  }
+  // An unproven caller, recursive activation, or suspended outer activation
+  // does not establish one execution. Keep its captured identity unknown.
+  if (![...owners].some((owner) => t.isProgram(owner))) return false;
+  for (const owner of owners) {
+    if (!t.isFunction(owner)) continue;
+    state.memberMutationFactsPhase ??= "requested";
+    if (state.memberMutationFactsPhase !== "indexed") return false;
+    // An escaped callable can reenter through callers outside the owned graph.
+    if (
+      state.literalMemberEffects
+        ?.get(owner)
+        ?.some(({ kind, path }) => kind === "escape" && path.length === 0)
+    )
+      return false;
+  }
+  return true;
+};
+
 /** Repeated member reads share unknown ordering, while retaining their source sites. */
 export const semanticCaptureOrderingIdentity = (
   capture: t.Node,
@@ -881,6 +957,7 @@ export const semanticBindingAtRead = (
     !repeatingLoop &&
     origin !== undefined &&
     binding.initializers.length + binding.referenceInitializers.length === 1 &&
+    binding.directOrigins.length === 0 &&
     sourcePosition !== null &&
     position !== null &&
     positionPrecedes(sourcePosition, position)
@@ -931,7 +1008,7 @@ const selectInitializers = (
   | {
       readonly binding: Pick<
         JavaScriptSemanticBindingState,
-        "initializers" | "referenceInitializers"
+        "initializers" | "referenceInitializers" | "directOrigins"
       >;
       readonly hasDefiniteInitializer: boolean;
     }
@@ -977,6 +1054,7 @@ const selectInitializers = (
   // can then reuse the binding's dependency-aware provenance memo rather than
   // treating every equivalent read as a new temporal snapshot.
   if (
+    !(replacesEntry && binding.directOrigins.length > 0) &&
     binding.initializers.every((initializer) => retained.has(initializer)) &&
     binding.referenceInitializers.every((initializer) =>
       retained.has(initializer),
@@ -986,6 +1064,7 @@ const selectInitializers = (
   return {
     hasDefiniteInitializer: replacesEntry,
     binding: {
+      directOrigins: replacesEntry ? [] : binding.directOrigins,
       initializers: binding.initializers.filter((initializer) =>
         retained.has(initializer),
       ),

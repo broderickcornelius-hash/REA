@@ -70,6 +70,7 @@ import {
 } from "./javascriptSemanticRequireOrigin.js";
 import { semanticBundledRequireOrigin } from "./javascriptBundledRequireOrigin.js";
 import { collectSemanticMemberMutationsSteps } from "./javascriptSemanticMemberMutations.js";
+import { semanticPromiseSettlementDependency } from "./javascriptSemanticPromiseIdentity.js";
 import {
   semanticEffectTiming,
   semanticEffectTimingWithinActivation,
@@ -100,7 +101,10 @@ import {
   electronMemberPath,
   ELECTRON_MODULE,
 } from "./javascriptElectronMemberWrites.js";
-import { range } from "./javascriptStaticAnalysisHelpers.js";
+import {
+  isWebSocketEndpointCandidate,
+  range,
+} from "./javascriptStaticAnalysisHelpers.js";
 import {
   semanticCoverage,
   RETURNED_REFERENCE_WIDENING_LIMITATION,
@@ -194,8 +198,6 @@ export const analyzeParsedJavaScriptReferences = (
 
 const indexedAmbientWriteStates =
   new WeakSet<JavaScriptSemanticAnalysisState>();
-const indexedMemberMutationStates =
-  new WeakSet<JavaScriptSemanticAnalysisState>();
 
 function* indexSemanticAmbientWritesSteps(
   state: JavaScriptSemanticAnalysisState,
@@ -216,16 +218,26 @@ function* indexSemanticAmbientWritesSteps(
 function* indexSemanticMemberMutationFactsSteps(
   state: JavaScriptSemanticAnalysisState,
 ): Generator<void, void> {
-  if (indexedMemberMutationStates.has(state)) return;
-  yield* indexSemanticAmbientWritesSteps(state);
-  yield* collectSemanticMemberMutationsSteps(
-    state.program,
-    state,
-    (site, reference, path) =>
-      referenceEffectsMayHaveChanged(state, site, reference, path),
-  );
-  indexedMemberMutationStates.add(state);
-  invalidateSemanticRequireDelegateWrites(state);
+  if (
+    state.memberMutationFactsPhase === "indexed" ||
+    state.memberMutationFactsPhase === "indexing"
+  )
+    return;
+  state.memberMutationFactsPhase = "indexing";
+  try {
+    yield* indexSemanticAmbientWritesSteps(state);
+    yield* collectSemanticMemberMutationsSteps(
+      state.program,
+      state,
+      (site, reference, path) =>
+        referenceEffectsMayHaveChanged(state, site, reference, path),
+    );
+    state.memberMutationFactsPhase = "indexed";
+    invalidateSemanticRequireDelegateWrites(state);
+  } finally {
+    if (state.memberMutationFactsPhase === "indexing")
+      state.memberMutationFactsPhase = "requested";
+  }
 }
 
 /** One owner projects source-site effects for complete reports or early exit. */
@@ -240,7 +252,7 @@ const visitSemanticReferenceEffectsAtSite = (
   effectTiming: typeof semanticEffectTiming = semanticEffectTiming,
 ): Omit<JavaScriptSemanticReferenceEffectsAtSite, "effects"> => {
   const { root, path: inferredPath } = semanticReferenceRoot(referenceNode);
-  const memberEffectsIndexed = indexedMemberMutationStates.has(state);
+  const memberEffectsIndexed = state.memberMutationFactsPhase === "indexed";
   if (!t.isIdentifier(root))
     return {
       bindingId: null,
@@ -295,16 +307,16 @@ const visitSemanticReferenceEffectsAtSite = (
     const ambientRoots = createAmbientPathResolver(state, false)(root).paths;
     for (const ambientRoot of ambientRoots) {
       const selectedPath = [...ambientRoot, ...path];
-      for (const [kind, effects] of [
-        ["member-write", state.ambientWriteEffects],
-        ["escape", state.ambientEscapeEffects],
-      ] as const)
-        for (const effect of effects)
-          if (
-            semanticPathsOverlap(selectedPath, effect.path) &&
-            !retain(kind, effect.node, effect.path.slice(ambientRoot.length))
+      for (const effect of state.ambientReferenceEffects)
+        if (
+          semanticPathsOverlap(selectedPath, effect.path) &&
+          !retain(
+            effect.kind === "write" ? "member-write" : "escape",
+            effect.node,
+            effect.path.slice(ambientRoot.length),
           )
-            return metadata;
+        )
+          return metadata;
     }
   }
   return metadata;
@@ -513,6 +525,10 @@ export type JavaScriptOpenReceiverFact =
 export interface JavaScriptReceiverFacts {
   readonly openReceivers: ReadonlyMap<number, JavaScriptOpenReceiverFact>;
   readonly rpcClientRoots: ReadonlySet<t.Node>;
+  /** This syntax needs ambient-write facts before endpoint interpretation. */
+  readonly hasWebSocketEndpointCandidate: boolean;
+  /** Constructor and consumed-pattern projections require alias-aware effects. */
+  readonly requiresWebSocketValueEffects: boolean;
 }
 
 export interface JavaScriptReceiverIndex extends JavaScriptBindingIndex {
@@ -547,6 +563,13 @@ export function* indexJavaScriptBindingsWithReceiversSteps(
     receivers,
     *indexAmbientWritesSteps() {
       yield* indexSemanticAmbientWritesSteps(state);
+      // Captured ambient constructors need callable escape facts before either
+      // consumer can prove a single activation. Discovery precedes this stream.
+      if (
+        receivers.hasWebSocketEndpointCandidate &&
+        state.ambientEscapes.covers(["global", "WebSocket"])
+      )
+        yield* indexSemanticMemberMutationFactsSteps(state);
     },
     *indexMemberMutationFactsSteps() {
       yield* indexSemanticMemberMutationFactsSteps(state);
@@ -575,7 +598,7 @@ export function* indexJavaScriptBindingsWithReceiversSteps(
       );
     },
     referenceMayHaveChangedAt(site, referenceNode, propertyPath) {
-      if (!indexedMemberMutationStates.has(state)) return true;
+      if (state.memberMutationFactsPhase !== "indexed") return true;
       return referenceEffectsMayHaveChanged(
         state,
         site,
@@ -598,6 +621,9 @@ function* classifyDefinitionReceiversSteps(
   const extensionStateReads: number[] = [];
   const roots = new Set<t.Node>();
   const clients = new Map<string, boolean>();
+  let hasWebSocketEndpointCandidate = false;
+  let requiresWebSocketValueEffects = false;
+  let hasPatternConsumer = false;
   const classifyRpcRoot = (node: t.Node): void => {
     if (!t.isMemberExpression(node) && !t.isOptionalMemberExpression(node))
       return;
@@ -697,6 +723,23 @@ function* classifyDefinitionReceiversSteps(
   };
   yield* traverseJavaScriptValueAstSteps(program, state.erasedSyntaxNodes, {
     enter: (node) => {
+      if (t.isArrayPattern(node) || t.isObjectPattern(node))
+        hasPatternConsumer = true;
+      if (
+        (t.isCallExpression(node) ||
+          t.isOptionalCallExpression(node) ||
+          t.isNewExpression(node)) &&
+        isWebSocketEndpointCandidate(node.callee, state, () => {
+          requiresWebSocketValueEffects = true;
+        })
+      )
+        hasWebSocketEndpointCandidate = true;
+      // Awaited aliases can project literal promises even when the constructor
+      // itself is a plain binding. Request the same completed effect facts.
+      if (t.isAwaitExpression(node))
+        semanticPromiseSettlementDependency(node.argument, state, () => {
+          requiresWebSocketValueEffects = true;
+        });
       classifyRpcRoot(node);
       classifyOpenReceiver(node);
     },
@@ -704,7 +747,15 @@ function* classifyDefinitionReceiversSteps(
   if (extensionStateReads.length > 0 && importsVsCodeModule(state))
     for (const start of extensionStateReads)
       facts.set(start, "extension-state");
-  return { openReceivers: facts, rpcClientRoots: roots };
+  return {
+    openReceivers: facts,
+    rpcClientRoots: roots,
+    hasWebSocketEndpointCandidate,
+    requiresWebSocketValueEffects:
+      requiresWebSocketValueEffects ||
+      state.memberMutationFactsPhase === "requested" ||
+      (hasWebSocketEndpointCandidate && hasPatternConsumer),
+  };
 }
 
 /** VS Code passes extension state through ExtensionContext, not an import. */
@@ -1052,6 +1103,8 @@ const createState = (
     getterResourceLimits: new Set(),
     returnedReferenceWidenings: new Set(),
     parentsByNode: new WeakMap(),
+    awaitSites: [],
+    callSites: [],
     erasedSyntaxNodes: new WeakSet(),
     scopes: [root],
     scopesById: new Map([[root.scopeId, root]]),
@@ -1073,8 +1126,7 @@ const createState = (
     escapingReferenceStores: new WeakSet(),
     retainedGlobalCallReceivers: new WeakSet(),
     ambientEscapes: new SemanticPropertyPathCoverage(),
-    ambientEscapeEffects: [],
-    ambientWriteEffects: [],
+    ambientReferenceEffects: [],
   };
 };
 
@@ -1129,9 +1181,19 @@ function* collectDefinitionsSteps(
         (parent !== null && state.erasedSyntaxNodes.has(parent)) ||
         isErasedJavaScriptValueChild(node, parent)
       ) {
+        // Erased declarations have no value binding. Module projection retains
+        // their type-only links independently of the runtime scope index.
         state.erasedSyntaxNodes.add(node);
         return;
       }
+      if (t.isAwaitExpression(node)) state.awaitSites.push(node);
+      if (
+        t.isCallExpression(node) ||
+        t.isOptionalCallExpression(node) ||
+        t.isNewExpression(node) ||
+        t.isTaggedTemplateExpression(node)
+      )
+        state.callSites.push(node);
       if (
         t.isWithStatement(node) ||
         t.isForInStatement(node) ||
@@ -1652,7 +1714,6 @@ const bindImportEquals = (
   state: JavaScriptSemanticAnalysisState,
 ): void => {
   const specifier = semanticImportEqualsSpecifier(node);
-  if (specifier === null) return;
   addBinding({
     state,
     scope,
@@ -1661,7 +1722,15 @@ const bindImportEquals = (
     mutable: false,
     definitionNode: node.id,
     initializer: null,
-    directOrigin: { specifier, importedPath: [], resolutionMode: "require" },
+    ...(specifier === null
+      ? {}
+      : {
+          directOrigin: {
+            specifier,
+            importedPath: [],
+            resolutionMode: "require" as const,
+          },
+        }),
   });
 };
 
@@ -2035,9 +2104,11 @@ const bindImports = (
   scope: JavaScriptSemanticScopeState,
   state: JavaScriptSemanticAnalysisState,
 ): void => {
-  if (isTypeOnlyImportDeclaration(node)) return;
   for (const specifier of node.specifiers) {
-    if (t.isImportSpecifier(specifier) && isTypeOnlyImportSpecifier(specifier))
+    if (
+      isTypeOnlyImportDeclaration(node) ||
+      (t.isImportSpecifier(specifier) && isTypeOnlyImportSpecifier(specifier))
+    )
       continue;
     const importedPath = t.isImportDefaultSpecifier(specifier)
       ? ["default"]
@@ -2285,10 +2356,12 @@ const addBinding = (input: AddBindingInput): void => {
   if (declarationKind !== undefined)
     binding.declarationKinds.add(declarationKind);
   binding.definitions.push({ kind, location: range(definitionNode) });
+  binding.definitionNodes.push(definitionNode);
   if (initializer !== null)
     binding.initializers.push({
       node: initializer,
       projection,
+      bindingNode: definitionNode,
       ...(iterationSources === undefined ? {} : { iterationSources }),
     });
   if (directOrigin !== undefined)
@@ -2319,6 +2392,7 @@ const createBinding = (
   memberWrites: [],
   escapedPaths: [],
   definitions: [],
+  definitionNodes: [],
   initializers: [],
   referenceInitializers: [],
   directOrigins: [],

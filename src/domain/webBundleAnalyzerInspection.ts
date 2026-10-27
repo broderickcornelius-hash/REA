@@ -2,7 +2,6 @@ import {
   isBrowserNetworkRequest,
   createXhrOpenRequestQuery,
 } from "./javascript/javascriptNetworkRequests.js";
-import type { JavaScriptSemanticAnalysisState } from "./javascript/javascriptSemanticState.js";
 import type {
   AnalysisAccumulator,
   IncludedScript,
@@ -20,6 +19,7 @@ import {
 } from "./javascript/javascriptSemanticTraversal.js";
 import { indexJavaScriptBindingsWithReceiversSteps } from "./javascript/javascriptSemanticAnalysis.js";
 import type { JavaScriptOpenReceiverFact } from "./javascript/javascriptSemanticAnalysis.js";
+import type { JavaScriptSemanticAnalysisState } from "./javascript/javascriptSemanticState.js";
 import { isIntrinsicMapLookup } from "./javascript/javascriptSemanticMapOperations.js";
 import {
   semanticStaticPropertyKey,
@@ -67,8 +67,10 @@ export const analyzeScript = (
   const index = completeSemanticSteps(
     indexJavaScriptBindingsWithReceiversSteps(file.program),
   );
+  const { bindings, receivers } = index;
   completeSemanticSteps(index.indexAmbientWritesSteps());
-  const { receivers } = index;
+  if (receivers.requiresWebSocketValueEffects)
+    completeSemanticSteps(index.indexMemberMutationFactsSteps());
   const routeScan = completeSemanticSteps(
     JavaScriptRouteScan.createSteps(file, index, ({ node, value, mechanism }) =>
       addFinding({
@@ -82,7 +84,7 @@ export const analyzeScript = (
     ),
   );
   const openReceiverFacts = receivers.openReceivers;
-  let mutationFactsIndexed = false;
+  let mutationFactsIndexed = receivers.requiresWebSocketValueEffects;
   const isMapLookup = (
     node: t.CallExpression | t.OptionalCallExpression | t.NewExpression,
   ): boolean => {
@@ -228,8 +230,8 @@ const inspectCall = (
   }
   const endpoint = endpointArgument(
     name,
-    node.arguments,
-    node.callee,
+    node,
+    bindings,
     openReceiverFacts.get(node.start ?? -1),
   );
   const mapLookup = isMapLookup(node);
