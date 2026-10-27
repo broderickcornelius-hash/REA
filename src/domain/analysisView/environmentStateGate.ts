@@ -13,6 +13,7 @@ import {
   same,
   scalarText,
   type JsonObject,
+  type ListedIds,
   type RecordedViewReason,
   type ReplayKey,
   type StateEntity,
@@ -303,6 +304,7 @@ const listReproduces = (
       readonly fields: string[];
       readonly pointer: string;
       readonly counters: string[];
+      readonly listed_ids: ListedIds[];
       readonly whole: ReadonlySet<number>;
       readonly query: ListQuery | undefined;
     };
@@ -368,13 +370,18 @@ export const checkListPlan = (
   plan: StatePlan,
 ): StateView => {
   const union = new FieldUnion();
-  const { whole, counters, minted } = listFacts(context, plan, union);
+  const { whole, counters, minted, listedIds } = listFacts(
+    context,
+    plan,
+    union,
+  );
   context.retain(union.bytes);
   const base = {
     tool: plan.tool.name,
     fields: union.fields,
     pointer: plan.pointer,
     counters,
+    listed_ids: listedIds,
     whole,
   };
   let query = listQuery(context, plan, whole);
@@ -415,6 +422,7 @@ export const checkListPlan = (
             .filter((ordinal) => whole.has(ordinal)),
         }),
     counters,
+    ...(listedIds.length === 0 ? {} : { listed_ids: listedIds }),
     ...(query === undefined ? {} : { query }),
     ...declaredMembers(minted, context.retain),
     checked_record_ordinals: plan.latest.map((record) => record.ordinal),

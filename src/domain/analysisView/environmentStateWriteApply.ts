@@ -13,14 +13,15 @@ import {
   type JsonObject,
   type StateEntity,
 } from "./environmentStateRules.js";
-import type {
-  FieldRule,
-  GeneratedRule,
-  JsonKind,
-  StateWritePlan,
-  WriteBody,
-  WriteCall,
-  WriteResponse,
+import {
+  emptySpellings,
+  type FieldRule,
+  type GeneratedRule,
+  type JsonKind,
+  type StateWritePlan,
+  type WriteBody,
+  type WriteCall,
+  type WriteResponse,
 } from "./environmentStateWriteRules.js";
 import {
   stampProblem,
@@ -148,6 +149,13 @@ export const bodyProblem = (
     }
     if (!body.accepted.includes(member))
       return `Member ${member} is not one the capture showed stored (${bodyContract(body)}).`;
+    // A recorded call sent this member empty, as a form does for a field left as it was.
+    if (
+      body.blank?.some(
+        (entry) => entry.member === member && same(entry.sent, value),
+      ) === true
+    )
+      continue;
     const recorded = ownMember(shapes.entity, member);
     const kind =
       recorded === undefined || recorded === null
@@ -320,15 +328,36 @@ const copiedShapes = (
     }),
   );
 
+/** A create's call with the members it left out that recorded calls sent empty, as the earliest sent them; one a call that left it out showed a default for keeps that default. */
+const withBlanks = (body: WriteBody, call: WriteCall): WriteCall => {
+  const given = call.body ?? {};
+  const left = (body.blank ?? []).filter(
+    ({ member }, index, blank) =>
+      !Object.hasOwn(given, member) &&
+      !(body.defaults ?? []).some((entry) => entry.member === member) &&
+      blank.findIndex((entry) => entry.member === member) === index,
+  );
+  return left.length === 0
+    ? call
+    : {
+        ...call,
+        body: {
+          ...Object.fromEntries(left.map(({ member, sent }) => [member, sent])),
+          ...given,
+        },
+      };
+};
+
 /** The fields of a created entity: the observed entity with every ruled field taken from the call or generated. */
 export const createdFields = (
   plan: Pick<StateWritePlan, "rules" | "body">,
   observed: JsonObject,
-  call: WriteCall,
+  sentCall: WriteCall,
   generate: GenerateValue,
   referenced?: ReferencedEntity,
 ): Applied<JsonObject> => {
   if (plan.body === null) return err("The tool has no modelled body.");
+  const call = withBlanks(plan.body, sentCall);
   const problem = bodyProblem(plan.body, call, {
     entity: { ...copiedShapes(plan.rules, observed), ...observed },
   });
@@ -500,6 +529,10 @@ export const writtenResponse = (
     readonly id: string;
     /** Generated clocks keep the response's spelling independently of the stored entity's. */
     readonly clocks?: readonly string[];
+    /** Members the call sent, which the answer shows as stored. */
+    readonly sent?: readonly string[];
+    /** Pointers into the entity to values the recorded answer had not loaded, which the answer keeps as recorded. */
+    readonly unloaded?: readonly string[];
   },
   optional: readonly string[] = [],
 ): Applied<JsonValue | undefined> => {
@@ -532,32 +565,74 @@ export const writtenResponse = (
     ...Object.keys(shown).filter(held),
     ...optional.filter((field) => !Object.hasOwn(shown, field) && held(field)),
   ];
-  return ok(
-    replaceAt(
-      recorded,
-      pointer,
-      Object.fromEntries(
-        fields.map((field) => {
-          const value = ownMember(written.fields!, field)!;
-          const clock =
-            written.clocks?.includes(field) === true
-              ? readClock(ownMember(shown, field))
-              : undefined;
-          return [
-            field,
-            clock === undefined ? value : respellClock(value, clock.format),
-          ];
-        }),
-      ),
-    ),
+  const entity = Object.fromEntries(
+    fields.map((field): [string, JsonValue] => {
+      const value = ownMember(written.fields!, field)!;
+      const answered = ownMember(shown, field);
+      // An answer spells an empty list or map the call did not send as its recording did.
+      if (
+        answered !== undefined &&
+        written.sent?.includes(field) !== true &&
+        emptySpellings(answered, value)
+      )
+        return [field, answered];
+      const clock =
+        written.clocks?.includes(field) === true
+          ? readClock(answered)
+          : undefined;
+      return [
+        field,
+        clock === undefined ? value : respellClock(value, clock.format),
+      ];
+    }),
   );
+  const answer = (written.unloaded ?? []).reduce<JsonObject>(
+    (rendered, path) => {
+      const tokens = pointerTokens(path);
+      const kept = memberAt(shown, tokens);
+      return kept === undefined
+        ? rendered
+        : withMemberAt(rendered, tokens, kept);
+    },
+    entity,
+  );
+  return ok(replaceAt(recorded, pointer, answer));
+};
+
+/** The value under these member names, nested objects included. */
+const memberAt = (
+  value: JsonValue | undefined,
+  tokens: readonly string[],
+): JsonValue | undefined =>
+  tokens.reduce<JsonValue | undefined>(
+    (inner, token) => (isObject(inner) ? ownMember(inner, token) : undefined),
+    value,
+  );
+
+/** A copy with the value under these member names replaced, when the object holds every one of them. */
+const withMemberAt = (
+  object: JsonObject,
+  tokens: readonly string[],
+  value: JsonValue,
+): JsonObject => {
+  const [first, ...rest] = tokens;
+  if (first === undefined || !Object.hasOwn(object, first)) return object;
+  if (rest.length === 0) return { ...object, [first]: value };
+  const inner = object[first];
+  return isObject(inner)
+    ? { ...object, [first]: withMemberAt(inner, rest, value) }
+    : object;
 };
 
 /** The shared bulk renderer: fixed acknowledgements, or one first-template element per written entity. */
 export const writtenBulkResponse = (
   response: WriteResponse,
   recorded: JsonValue | undefined,
-  written: readonly { readonly fields: JsonObject; readonly id: string }[],
+  written: readonly {
+    readonly fields: JsonObject;
+    readonly id: string;
+    readonly sent?: readonly string[];
+  }[],
 ): Applied<JsonValue | undefined> => {
   if (response.shape === "empty") return ok(undefined);
   if (response.shape === "recorded") return ok(recorded);

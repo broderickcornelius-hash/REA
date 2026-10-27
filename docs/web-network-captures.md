@@ -670,12 +670,12 @@ Every entity cites its `record_ordinals`.
 
 `views` lists one plan per read tool in tool order:
 
-| Shape      | Plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `item`     | The entity object at `pointer` (the root, one member, or `/0` or `/<member>/0`), the ordered `fields` the view shows and the `required_fields` every recording had, and `envelope_ordinal`: the recording whose response, with the entity replaced, every item response shares, leaving out the `per_response_members` each response there mints: a top-level UUID or clock that differed on every repeat of every concrete path the view answers, with no write between, and never stayed the same on a repeat elsewhere; list views name theirs too                                                                                                                                                                                                                                                                                                                                             |
-| `list`     | The array at `pointer`, its `fields`, `membership` (`all`: every entity of the collection in state order, when each recording listed exactly that, had no query or only paging parameters (`limit`, `offset`, `page`, `per_page`, `perpage`, `page_size`, `pagesize`, `size`, `start`, `_start`, `_end`), no item-total member (`total`, `count`, `totalCount`, `item_count`, `totalcount`, `itemcount`, `numberOfElements`, but not `total_pages` or `per_page`; a number or a string of digits; top-level, or in a top-level object beside the list such as `pageInfo.totalRows`) differing from the number listed, and no `has_more`, `next` or next-page token member set; `recorded`: the entities each recording listed, except on the lines `all_record_ordinals` names, which each meet those conditions on their own and list every entity), and `counters` that equal the number listed |
-| `document` | The latest initial value of a list tool whose responses hold no identified list, when its initial reads share one request line; held in `documents` with that `path`, whether or not the capture writes it, unless its value changed across any recorded write between those reads (`fields-differ`); its `per_response_members` are the members of the value each response on that path mints                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `recorded` | A `reason` the tool replays its recordings instead                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Shape      | Plan                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `item`     | The entity object at `pointer` (the root, one member, or `/0` or `/<member>/0`), the ordered `fields` the view shows and the `required_fields` every recording had, and `envelope_ordinal`: the recording whose response, with the entity replaced, every item response shares, leaving out the `per_response_members` each response there mints: a top-level UUID or clock that differed on every repeat of every concrete path the view answers, with no write between, and never stayed the same on a repeat elsewhere; list views name theirs too                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `list`     | The array at `pointer`, its `fields`, `membership` (`all`: every entity of the collection in state order, when each recording listed exactly that, had no query or only paging parameters (`limit`, `offset`, `page`, `per_page`, `perpage`, `page_size`, `pagesize`, `size`, `start`, `_start`, `_end`), no item-total member (`total`, `count`, `totalCount`, `item_count`, `totalcount`, `itemcount`, `numberOfElements`, but not `total_pages` or `per_page`; a number or a string of digits; top-level, or in a top-level object beside the list such as `pageInfo.totalRows`) differing from the number listed, and no `has_more`, `next` or next-page token member set; `recorded`: the entities each recording listed, except on the lines `all_record_ordinals` names, which each meet those conditions on their own and list every entity), `counters` that equal the number listed, and `listed_ids`: top-level members that list two or more listed entities' identity values in list order (Paperless's `all`), which a rendered list sets to its own unless it is a page of more matches |
+| `document` | The latest initial value of a list tool whose responses hold no identified list, when its initial reads share one request line; held in `documents` with that `path`, whether or not the capture writes it, unless its value changed across any recorded write between those reads (`fields-differ`); its `per_response_members` are the members of the value each response on that path mints                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `recorded` | A `reason` the tool replays its recordings instead                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 An item or list plan is kept only when it reproduces the latest initial
 recording of each request line from the state, comparing JSON values without
@@ -749,15 +749,24 @@ holds a distinct integer of the same length, as time-based ids do), a
 `nested-clock` object whose clocks the request stamped, a `template` around
 a generated value, a `reference` to an entity, or a `composed` string; other
 fields keep the observed value. When the first read of a created entity before
-the next write shows fields the create's answer lacks, or its clocks to another
-precision, the observed entity takes them (`observation.read`). An item read
+the next write shows fields the create's answer lacks, its clocks to another
+precision, or values the answer had not loaded (an empty, zero or `false` value,
+Go's zero time, or an object whose members are each loaded so), the observed
+entity takes them (`observation.read`, whose `unloaded` points to the values the
+answer had not loaded). An item read
 that agrees with the answer otherwise lends its fields and clock spellings and
 no longer confirms the create; one that disagrees or omits an answer field its
 item view renders still checks it. Clock agreement uses the coarser recorded
 precision, including microseconds. A list read
 only adds fields the answer lacks and still checks it. Serving answers a create
-in its answer's shape and clock precision and stores the fields of both with
-the item read-back's clock precision. A `reference` is an object holding fields of the
+in its answer's shape and clock precision, with empty lists and maps the call
+did not send spelled (`null`, `[]` or `{}`) as its answer spelled them and the
+values it had not loaded as it answered them (unless the call sent one the plan
+stores as sent), and stores the fields of both,
+as the item read-back shows them, with its clock precision. Updates
+answer empty lists and maps they did not send as their answers spelled them
+too; a member a call sent is answered as sent. A `reference` is an object
+holding fields of the
 entity a sent member names, as the state holds it (a parent beside `parentId`):
 the member is accepted with any value, serving looks the entity up and refuses a
 call naming one the environment does not hold or holds in more than one
@@ -770,7 +779,13 @@ create added stays), every field both rule they rule alike (an echo one showed
 sorted stays sorted, unless a call stored its strings out of order as sent),
 and a field neither rules holds one value. Members either call sent are accepted, only those every call sent are
 required, and an echoed member a call left out takes the value that call stored
-(`body.defaults`). A clock rule widens to `trimmed` only when no held entity or
+(`body.defaults`). A member a create sent empty (`""`, `null`, `false`, `[]` or
+`{}`), as a form sends a field left as it was, is not required: a call that
+leaves it out is applied as sending that value (`body.blank`), unless a call
+that left it out showed a default, which it then keeps. A call may send it as any
+recorded call sent it empty, even after a default is learned, and one leaving it
+out is applied as the earliest did, as when one create sent `false` and another
+`null`. A clock rule widens to `trimmed` only when no held entity or
 earlier call showed that clock at a fixed width, and a slug to spelling `&` as
 the word (`ampersand: "and"`) only when no call the plan accepted nor entity the
 type held dropped one. A later
@@ -783,7 +798,8 @@ or leaves out is `unexplained-change`. A create whose observed reference
 differs from the
 entity the plan rebuilds, whether or not it sent the reference member, is
 `unexplained-change`. So is a create that left out an echoed member yet shows a
-value different from the learned default.
+value different from the learned default, or that stored a field no rule writes
+otherwise than the plan keeps it.
 A `composed` string is literal text and parts read from the fields other rules
 write: a field's value, its slug, or a clock's calendar digits
 (`YYYYMMDDhhmmss`, `YYYYMMDD`, `YYYY-MM-DD` or `YYYY/MM/DD`, in the clock's
@@ -821,7 +837,8 @@ a newly learned slug. Any other member stored
 differently is accepted only with its
 recorded value (`body.fixed`) and stores the value the call that showed it
 recorded (the `value` of its `constant` rule), and a field it changed without
-sending must be a clock, a nested clock, an increment, a slug, a fresh `unique`
+sending (an empty list or map one answer spells `null` and another `[]` or `{}`
+is unchanged) must be a clock, a nested clock, an increment, a slug, a fresh `unique`
 value, a `stamp` of the acting user, a value `derived` from the one member it
 stores nowhere, a `reference` to the entity a sent member names (kept by a call that names the entity the field already repeats), a `composed` string whose parts read members it stored as sent
 or fields it left as they were and spell the value before the call too, or for
@@ -831,7 +848,7 @@ value or set must hold for every call of the tool, and an action is served
 only once a call found what it sets already set. A write is served only
 with the query its first call sent, which serving applies to a call that
 leaves a parameter out and the catalog advertises as required. Every member the first call sent is required, except by `PATCH` and
-`POST` updates.
+`POST` updates and members a create sent empty.
 
 A read on a line `query` answers is checked against the query evaluated over
 the replayed state. It covers the collection only when every parameter sorts or
@@ -859,7 +876,25 @@ contradicted it; otherwise its `reason` is the first of its build reason
 `checked_record_ordinals` lists the confirming reads, `insert` places created
 entities (sorted by a field the collection's recorded order shows, else last),
 and `write_clock` is the end of the last timed record, to the next second, when
-all request completions are known; otherwise it is null.
+all request completions are known; otherwise it is null. An
+update that writes the field its type's creates are sorted by moves its entity
+to where the new value sorts (its own `insert`); a bulk update moves each entity
+it writes in turn, as replay applies them. When a read listing the whole
+collection in its own order, not one its query sorts, fails after an update and the type's creates are not sorted by a field
+that update writes, the view tries the order serving gives when each write since
+a list in the collection's own order showed its entity moves it in turn by such a
+field, against the others' values before their own writes, when
+the entities no write has changed since a list in the collection's own order last
+showed them already follow it, as serving moves only the entities a write
+changes, and unless
+a create was placed by a sort that excludes it or a read listing the whole
+collection in its own order, not one its query sorts, that placed a create did
+not follow it; on a match, the type's creates
+and updates take that order, as Grafana keeps folders by title though no earlier
+read could tell that from creation order, or from id order where both ascend.
+An update moves its entity by its creates' sort only when a list read showed a
+create placed, in replay as in serving, so no read confirms an update by a sort
+a create only guessed from the initial order.
 
 Values in the state are recorded data, so the view refuses the same parents as
 the manifest, including those inspected with `sensitive_values`, and a

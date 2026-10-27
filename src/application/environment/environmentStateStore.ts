@@ -311,9 +311,13 @@ export class EnvironmentStateStore {
     return this.updateAll([entity]);
   }
 
-  /** Replace held entities in one step, unless the state would outgrow what `data/add` loads; a refusal changes nothing. */
+  /**
+   * Replace held entities in one step, unless the state would outgrow what `data/add` loads; a refusal changes nothing.
+   * `order` puts held entities, the replacements among them, in that order in the places they hold.
+   */
   updateAll(
     entities: readonly StateEntity[],
+    order: readonly StateEntity[] = [],
   ): Result<void, AnalysisResourceConstraintError> {
     const replaced = new Map<StateEntity, StateEntity>();
     for (const entity of entities) {
@@ -329,11 +333,17 @@ export class EnvironmentStateStore {
       delta += jsonByteLength(entity) - jsonByteLength(held);
     const bytes = this.#grown(delta);
     if (!bytes.ok) return bytes;
+    const key = (entity: StateEntity) =>
+      compositeKey([entity.type, entity.collection, entity.id]);
+    const placed = new Set(order.map(key));
+    let next = 0;
     this.#install(
       {
         ...this.#content,
-        entities: this.#content.entities.map(
-          (candidate) => replaced.get(candidate) ?? candidate,
+        entities: this.#content.entities.map((candidate) =>
+          placed.has(key(candidate))
+            ? order[next++]!
+            : (replaced.get(candidate) ?? candidate),
         ),
       },
       bytes.value,

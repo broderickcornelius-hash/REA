@@ -163,6 +163,8 @@ export interface EffectContext {
   readonly isWrite: (record: StateRecordFacts) => boolean;
   readonly viewOf: (ordinal: number) => StateView | undefined;
   readonly idField: (type: string) => string;
+  /** Fields of a type whose values change on their own, which no read checks. */
+  readonly volatileOf: (type: string) => ReadonlySet<string>;
   /** Mark a later read as a create's or update's observation, so it does not check that write. */
   readonly observed: (ordinal: number) => void;
   /** Whether an unmodelled write may have changed the entity since the state last saw it. */

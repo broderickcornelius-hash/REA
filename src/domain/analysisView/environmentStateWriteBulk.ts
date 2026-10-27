@@ -229,7 +229,15 @@ export const applyBulk = (
           : result?.kind === "applied"
             ? result.responseFields
             : undefined;
-        return fields === undefined ? [] : [{ id: target.id, fields }];
+        return fields === undefined
+          ? []
+          : [
+              {
+                id: target.id,
+                fields,
+                sent: Object.keys(named[index]!.body ?? {}),
+              },
+            ];
       });
       const fits =
         planned.shape === response.shape &&
