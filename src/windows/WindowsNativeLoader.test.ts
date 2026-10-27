@@ -8,26 +8,30 @@ import {
   type WindowsNativeLoadHost,
 } from "./WindowsNativeLoader.js";
 
+const machines = { x64: 0x8664, arm64: 0xaa64 } as const;
+
 const fixture = (
   capabilities: {
     protocolStdin?: boolean;
     jobMemoryLimit?: unknown;
     privateBridgeDescriptorAccess?: unknown;
   } = {},
+  architecture: keyof typeof machines = "x64",
 ) => {
-  const bytes = Buffer.alloc(128);
+  const bytes = Buffer.alloc(152);
   bytes.write("MZ");
   bytes.writeUInt32LE(64, 0x3c);
   bytes.write("PE\0\0", 64, "ascii");
-  bytes.writeUInt16LE(0x8664, 68);
+  bytes.writeUInt16LE(machines[architecture], 68);
+  bytes.writeUInt16LE(64, 84);
   bytes.writeUInt16LE(0x20b, 88);
   const manifest = {
     packageVersion: "1.0.0",
     platform: "win32",
-    architecture: "x64",
+    architecture,
     abiVersion: 1,
     nodeApiVersion: 8,
-    artifact: "rea-windows-x64.node",
+    artifact: `rea-windows-${architecture}.node`,
     artifactSha256: createHash("sha256").update(bytes).digest("hex"),
   };
   const identity = {
@@ -40,20 +44,25 @@ const fixture = (
     directory: true,
   };
   let loads = 0;
+  const requested: string[] = [];
   const host: WindowsNativeLoadHost = {
     platform: "win32",
-    architecture: "x64",
+    architecture,
     nodeApiVersion: "8",
     packageVersion: "1.0.0",
     readManifest: () => manifest,
-    readArtifact: () => bytes,
-    loadArtifact: () => {
+    readArtifact: (artifact) => {
+      requested.push(artifact);
+      return bytes;
+    },
+    loadArtifact: (artifact) => {
+      requested.push(artifact);
       loads++;
       return {
         call: () => ({
           abiVersion: 1,
           nodeApiVersion: 8,
-          architecture: "x64",
+          architecture,
           filesystem: identity,
           privateDacl: true,
           privateBridgeDescriptorAccess: true,
@@ -64,7 +73,7 @@ const fixture = (
       };
     },
   };
-  return { host, manifest, bytes, loads: () => loads };
+  return { host, manifest, bytes, loads: () => loads, requested };
 };
 
 describe("packaged Windows native compatibility", () => {
@@ -113,7 +122,7 @@ describe("packaged Windows native compatibility", () => {
 
   it.each([
     [{ platform: "linux" as const }, "host"],
-    [{ architecture: "arm64" }, "host"],
+    [{ architecture: "ia32" }, "host"],
     [{ nodeApiVersion: "7" }, "host"],
     [{ nodeApiVersion: undefined }, "host"],
     [{ packageVersion: "2.0.0" }, "artifact"],
@@ -269,6 +278,60 @@ describe("packaged Windows native artifact validation", () => {
     expect(loadWindowsNativeAuthority(value.host)).toMatchObject({
       available: false,
       reason: expect.stringContaining("privateBridgeDescriptorAccess"),
+    });
+  });
+});
+
+describe("packaged Windows native architecture binding", () => {
+  it("admits an arm64 host only with its own packaged artifact", () => {
+    const value = fixture({}, "arm64");
+    expect(loadWindowsNativeAuthority(value.host)).toMatchObject({
+      available: true,
+      authority: { inspection: { architecture: "arm64" } },
+    });
+    expect(value.requested).toEqual([
+      "rea-windows-arm64.node",
+      "rea-windows-arm64.node",
+    ]);
+  });
+
+  it.each([
+    { architecture: "x64" },
+    { artifact: "rea-windows-x64.node" },
+    { architecture: "x64", artifact: "rea-windows-x64.node" },
+  ])(
+    "rejects a manifest declaring another target before reading the artifact: %j",
+    (override) => {
+      const value = fixture({}, "arm64");
+      expect(
+        loadWindowsNativeAuthority({
+          ...value.host,
+          readManifest: () => ({ ...value.manifest, ...override }),
+        }),
+      ).toMatchObject({
+        available: false,
+        failureStage: "artifact",
+        reason: expect.stringMatching(
+          /Windows native artifact manifest has an invalid (?:architecture|artifact)/u,
+        ),
+      });
+      expect(value.requested).toEqual([]);
+      expect(value.loads()).toBe(0);
+    },
+  );
+
+  it("rejects an inspection reporting another architecture", () => {
+    const arm64 = fixture({}, "arm64");
+    const x64 = fixture();
+    expect(
+      loadWindowsNativeAuthority({
+        ...arm64.host,
+        loadArtifact: x64.host.loadArtifact,
+      }),
+    ).toMatchObject({
+      available: false,
+      failureStage: "inspection",
+      reason: expect.stringContaining("reports x64"),
     });
   });
 });
